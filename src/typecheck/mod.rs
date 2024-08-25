@@ -1,6 +1,6 @@
 use std::collections::HashMap;
-use crate::parser::syntax_tree::lang::LanguloSyntaxNode;
-use crate::parser::syntax_tree::node::AstNodeKind;
+use crate::parser::syntax_tree::lang::{NodeId, LanguloSyntaxNode, LanguloSyntaxNodeExt};
+use crate::parser::syntax_tree::node::AstNode;
 use crate::typecheck::types::{LanguloType, LanguloVariant};
 use rusttyc::{TcErr, TcKey, TypeTable, VarlessTypeChecker};
 use crate::errors::err::LanguloErr;
@@ -8,8 +8,8 @@ use crate::errors::err::LanguloErr;
 mod types;
 
 pub struct TypeChecker {
-    node_to_key: HashMap<u64, TcKey>,
-    key_to_type: Option<TypeTable<LanguloVariant>>,
+    node_to_key: HashMap<NodeId, TcKey>,
+    key_to_type: TypeTable<LanguloVariant>,
 }
 
 macro_rules! assert_children_count {
@@ -34,18 +34,16 @@ impl TypeChecker {
     pub fn new() -> Self {
         Self {
             node_to_key: HashMap::new(),
-            key_to_type: None,
+            key_to_type: Default::default(),
         }
     }
 
     pub fn type_of(&self, node: &LanguloSyntaxNode) -> &LanguloType {
-        // let key = self.node_to_key.get(node.id).unwrap();
+        let key = self.node_to_key.get(&node.id()).unwrap();
 
-        // self.key_to_type
-        //     .expect("need to perform typechecking before types of nodes can be queried")
-        //     .get(key)
-        //     .expect(&*format!("no type was inferred for node {:?}", node))
-        &LanguloType::Int
+        self.key_to_type
+            .get(key)
+            .expect(&*format!("no type was inferred for node {:?}", node))
     }
 
     /// also runs assert on the expected structure of the AST while typechecking
@@ -53,10 +51,10 @@ impl TypeChecker {
 
         let mut tc = VarlessTypeChecker::new();
         self.tc_node(&mut tc, &root)
-            .map_err(|tc_err| LanguloErr::typecheck("todo".to_string()))?;
+            .map_err(|_| LanguloErr::typecheck("todo".to_string()))?;
         let table = tc.type_check()
-            .map_err(|tc_err| LanguloErr::typecheck("todo".to_string()))?;
-        self.key_to_type = Some(table);
+            .map_err(|_| LanguloErr::typecheck("todo".to_string()))?;
+        self.key_to_type = table;
         Ok(())
     }
 
@@ -64,7 +62,7 @@ impl TypeChecker {
         let key = tc.new_term_key();
 
         match node.kind() {
-            AstNodeKind::Root => {
+            AstNode::Root => {
                 let mut last_key = match node.first_child() {
                     None => panic!("cannot typecheck an empty program"),
                     Some(child) => self.tc_node(tc, &child)?
@@ -74,15 +72,15 @@ impl TypeChecker {
                 }
                 tc.impose(key.concretizes(last_key))?;
             }
-            AstNodeKind::Whitespace => panic!("trivia appears in AST"),
-            AstNodeKind::Comment => panic!("trivia appears in AST"),
-            AstNodeKind::Int => tc.impose(key.concretizes_explicit(LanguloVariant::Int))?,
-            AstNodeKind::Float => tc.impose(key.concretizes_explicit(LanguloVariant::Float))?,
-            AstNodeKind::Bool => tc.impose(key.concretizes_explicit(LanguloVariant::Bool))?,
-            AstNodeKind::Str => tc.impose(key.concretizes_explicit(LanguloVariant::Str))?,
-            AstNodeKind::Char => tc.impose(key.concretizes_explicit(LanguloVariant::Char))?,
+            AstNode::Whitespace => panic!("trivia appears in AST"),
+            AstNode::Comment => panic!("trivia appears in AST"),
+            AstNode::Int => tc.impose(key.concretizes_explicit(LanguloVariant::Int))?,
+            AstNode::Float => tc.impose(key.concretizes_explicit(LanguloVariant::Float))?,
+            AstNode::Bool => tc.impose(key.concretizes_explicit(LanguloVariant::Bool))?,
+            AstNode::Str => tc.impose(key.concretizes_explicit(LanguloVariant::Str))?,
+            AstNode::Char => tc.impose(key.concretizes_explicit(LanguloVariant::Char))?,
 
-            AstNodeKind::Add => {
+            AstNode::Add => {
                 assert_children_count!(node, 2);
                 tc.impose(key.concretizes_explicit(LanguloVariant::Addable))?;
                 let children: Vec<_> = node.children().collect();
@@ -90,9 +88,9 @@ impl TypeChecker {
                 let rhs = self.tc_node(tc, &children[1])?;
                 tc.impose(key.is_meet_of(lhs, rhs))?;
             }
-            AstNodeKind::Subtract => unimplemented!(),
-            AstNodeKind::Identifier => unimplemented!(),
-            AstNodeKind::Multiply => {
+            AstNode::Subtract => unimplemented!(),
+            AstNode::Identifier => unimplemented!(),
+            AstNode::Multiply => {
                 assert_children_count!(node, 2);
                 tc.impose(key.concretizes_explicit(LanguloVariant::Multipliable))?;
                 let children: Vec<_> = node.children().collect();
@@ -100,14 +98,14 @@ impl TypeChecker {
                 let rhs = self.tc_node(tc, &children[1])?;
                 tc.impose(key.is_meet_of(lhs, rhs))?;
             }
-            AstNodeKind::Divide => unimplemented!(),
-            AstNodeKind::LogicalAnd => unimplemented!(),
-            AstNodeKind::LogicalOr => unimplemented!(),
-            AstNodeKind::LogicalXor => unimplemented!(),
-            AstNodeKind::LogicalNot => unimplemented!(),
-            AstNodeKind::Modulo => unimplemented!(),
+            AstNode::Divide => unimplemented!(),
+            AstNode::LogicalAnd => unimplemented!(),
+            AstNode::LogicalOr => unimplemented!(),
+            AstNode::LogicalXor => unimplemented!(),
+            AstNode::LogicalNot => unimplemented!(),
+            AstNode::Modulo => unimplemented!(),
         }
-        // self.node_to_key.insert(node.id, key);
+        self.node_to_key.insert(node.id(), key);
         Ok(key)
     }
 }

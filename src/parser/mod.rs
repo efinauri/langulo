@@ -5,7 +5,7 @@ use crate::errors::err::LanguloErr;
 use crate::lexer::tok::Tok;
 use crate::lexer::Lexer;
 use crate::parser::syntax_tree::lang::LanguloSyntaxNode;
-use crate::parser::syntax_tree::node::AstNodeKind;
+use crate::parser::syntax_tree::node::AstNode;
 use rowan::Checkpoint;
 
 pub type ASTBuilder = rowan::GreenNodeBuilder<'static>;
@@ -37,28 +37,28 @@ impl<'a> Parser<'a> {
         LanguloSyntaxNode::new_root(self.builder.finish())
     }
 
-    fn new_leaf_node(&mut self, expr: AstNodeKind, content: &str) -> Result<(), LanguloErr> {
+    fn new_leaf_node(&mut self, expr: AstNode, content: &str) -> Result<(), LanguloErr> {
         self.builder.start_node(expr.into());
         self.builder.token(expr.into(), content);
         self.builder.finish_node();
         Ok(())
     }
 
-    fn new_binary_node(&mut self, kind: AstNodeKind, checkpoint: Checkpoint, precedence: u8) -> Result<(), LanguloErr> {
+    fn new_binary_node(&mut self, kind: AstNode, checkpoint: Checkpoint, precedence: u8) -> Result<(), LanguloErr> {
         self.builder.start_node_at(checkpoint, kind.into());
         self.parse_expr(precedence)?;
         self.builder.finish_node();
         Ok(())
     }
 
-    fn new_prefix_unary_node(&mut self, kind: AstNodeKind, tok: &Tok) -> Result<(), LanguloErr> {
+    fn new_prefix_unary_node(&mut self, kind: AstNode, tok: &Tok) -> Result<(), LanguloErr> {
         self.builder.start_node(kind.into());
         self.parse_expr(tok.precedence())?;
         self.builder.finish_node();
         Ok(())
     }
 
-    fn new_postfix_unary_node(&mut self, kind: AstNodeKind, checkpoint: Checkpoint, precedence: u8) -> Result<(), LanguloErr> {
+    fn new_postfix_unary_node(&mut self, kind: AstNode, checkpoint: Checkpoint, precedence: u8) -> Result<(), LanguloErr> {
         self.builder.start_node_at(checkpoint, kind.into());
         self.parse_expr(precedence)?;
         self.builder.finish_node();
@@ -66,7 +66,7 @@ impl<'a> Parser<'a> {
     }
 
     pub fn parse(&mut self) -> Result<(), LanguloErr> {
-        self.builder.start_node(AstNodeKind::Root.into());
+        self.builder.start_node(AstNode::Root.into());
         while self.lexer.peek()?.is_some() {
             self.parse_expr(0)?;
             self.handle_semicolon()?;
@@ -100,12 +100,12 @@ impl<'a> Parser<'a> {
         let (tok, content) = next!(self);
 
         match tok {
-            Tok::Int => self.new_leaf_node(AstNodeKind::Int, content)?,
-            Tok::Float => self.new_leaf_node(AstNodeKind::Float, content)?,
-            Tok::Bool => self.new_leaf_node(AstNodeKind::Bool, content)?,
-            Tok::Char => self.new_leaf_node(AstNodeKind::Char, content)?,
-            Tok::Str => self.new_leaf_node(AstNodeKind::Str, content)?,
-            Tok::Not => self.new_prefix_unary_node(AstNodeKind::LogicalNot, &tok)?,
+            Tok::Int => self.new_leaf_node(AstNode::Int, content)?,
+            Tok::Float => self.new_leaf_node(AstNode::Float, content)?,
+            Tok::Bool => self.new_leaf_node(AstNode::Bool, content)?,
+            Tok::Char => self.new_leaf_node(AstNode::Char, content)?,
+            Tok::Str => self.new_leaf_node(AstNode::Str, content)?,
+            Tok::Not => self.new_prefix_unary_node(AstNode::LogicalNot, &tok)?,
             _ => return Err(LanguloErr::semantic(
                 &*format!("Expected a literal or prefix operator, but found {}", content)
             ))
@@ -118,13 +118,13 @@ impl<'a> Parser<'a> {
         let (tok, content) = next!(self);
 
         match tok {
-            Tok::Plus => self.new_binary_node(AstNodeKind::Add, checkpoint, precedence)?,
-            Tok::Minus => self.new_binary_node(AstNodeKind::Subtract, checkpoint, precedence)?,
-            Tok::Star => self.new_binary_node(AstNodeKind::Multiply, checkpoint, precedence)?,
-            Tok::Slash => self.new_binary_node(AstNodeKind::Divide, checkpoint, precedence)?,
-            Tok::Modulo => self.new_binary_node(AstNodeKind::Modulo, checkpoint, precedence)?,
-            Tok::And => self.new_binary_node(AstNodeKind::LogicalAnd, checkpoint, precedence)?,
-            Tok::Or => self.new_binary_node(AstNodeKind::LogicalOr, checkpoint, precedence)?,
+            Tok::Plus => self.new_binary_node(AstNode::Add, checkpoint, precedence)?,
+            Tok::Minus => self.new_binary_node(AstNode::Subtract, checkpoint, precedence)?,
+            Tok::Star => self.new_binary_node(AstNode::Multiply, checkpoint, precedence)?,
+            Tok::Slash => self.new_binary_node(AstNode::Divide, checkpoint, precedence)?,
+            Tok::Modulo => self.new_binary_node(AstNode::Modulo, checkpoint, precedence)?,
+            Tok::And => self.new_binary_node(AstNode::LogicalAnd, checkpoint, precedence)?,
+            Tok::Or => self.new_binary_node(AstNode::LogicalOr, checkpoint, precedence)?,
             _ => return Err(LanguloErr::semantic(
                 &*format!("Expected an infix or postfix operator, but found {}", content)
             ))
@@ -136,11 +136,11 @@ impl<'a> Parser<'a> {
         while let Some((tok, content)) = self.lexer.peek()? {
             match tok {
                 Tok::Whitespace => {
-                    self.builder.token(AstNodeKind::Whitespace.into(), content);
+                    self.builder.token(AstNode::Whitespace.into(), content);
                     self.lexer.next()?;
                 }
                 Tok::Comment => {
-                    self.builder.token(AstNodeKind::Comment.into(), content);
+                    self.builder.token(AstNode::Comment.into(), content);
                     self.lexer.next()?;
                 }
                 _ => break,
@@ -170,7 +170,7 @@ mod tests {
 
     pub fn to_simplified_string(node: &LanguloSyntaxNode) -> String {
         let children: Vec<String> = node.children().map(|c| to_simplified_string(&c)).collect();
-        if node.kind() == AstNodeKind::Root { return children.join("\n"); }
+        if node.kind() == AstNode::Root { return children.join("\n"); }
 
         if children.is_empty() {
             format!("{}", node.text()) // Assuming `text()` returns the string content for leaf nodes

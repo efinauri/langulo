@@ -2,13 +2,8 @@ use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::ToPrimitive;
 use rowan::{GreenNode, NodeOrToken, SyntaxKind};
 
-pub struct tmp {
-    kind: AstNodeKind,
-    id: u64,
-}
-
 #[derive(FromPrimitive, ToPrimitive, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum AstNodeKind {
+pub enum AstNode {
     // leaf nodes
     Root,
     Int,
@@ -34,13 +29,13 @@ pub enum AstNodeKind {
     Modulo,
 }
 
-impl From<AstNodeKind> for SyntaxKind {
-    fn from(value: AstNodeKind) -> Self {
+impl From<AstNode> for SyntaxKind {
+    fn from(value: AstNode) -> Self {
         SyntaxKind(value.to_u16().unwrap())
     }
 }
 
-impl From<NodeOrToken<GreenNode, GreenNode>> for AstNodeKind {
+impl From<NodeOrToken<GreenNode, GreenNode>> for AstNode {
     fn from(value: NodeOrToken<GreenNode, GreenNode>) -> Self {
         value.into()
     }

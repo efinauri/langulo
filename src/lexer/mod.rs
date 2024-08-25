@@ -14,7 +14,7 @@ impl<'a> Lexer<'a> {
     pub fn new(input: &'a str) -> Self {
         Self {
             logos: Tok::lexer(input),
-            buffer: None
+            buffer: None,
         }
     }
 
@@ -43,4 +43,27 @@ impl<'a> Lexer<'a> {
         }
         Ok(&self.buffer)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::lexer::Lexer;
+    use crate::lexer::tok::Tok;
+
+    #[test]
+    fn walk() {
+        let mut lex = Lexer::new("3+2=5");
+        assert_eq!(lex.peek().expect("no"), &Some((Tok::Int, "3")));
+        assert_eq!(lex.peek().expect("no"), &Some((Tok::Int, "3")));
+
+        assert_eq!(lex.next().expect("no"), Some((Tok::Int, "3")));
+
+        assert_eq!(lex.next().expect("no"), Some((Tok::Plus, "+")));
+        assert_eq!(lex.peek().expect("no"), &Some((Tok::Int, "2")));
+        assert!(lex.next().expect("no").is_some()); //2
+        assert!(lex.next().expect("no").is_some()); //=
+        assert!(lex.next().expect("no").is_some()); //5
+        assert!(lex.next().expect("no").is_none());
+        assert!(lex.peek().expect("no").is_none())
+        }
 }

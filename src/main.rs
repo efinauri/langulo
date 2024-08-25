@@ -4,7 +4,6 @@ mod lexer;
 mod parser;
 mod repl;
 mod errors;
-mod syntax_tree;
 mod typecheck;
 
 fn main() {

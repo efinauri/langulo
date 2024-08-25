@@ -25,4 +25,3 @@ codespan-reporting = "0.11.1"
 log = "0.4.22"
 
 [dev-dependencies]
-expect-test = "1.5.0"

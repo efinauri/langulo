@@ -7,6 +7,7 @@ pub enum LanguloType {
     Float,
     Bool,
     Str,
+    Char,
     Option(Box<LanguloType>),
 }
 
@@ -20,7 +21,8 @@ pub enum LanguloVariant {
     // utility types for type inference
     Any,
     Addable, // int+int, flt+flt, str+str
-    Repeatable, // int*str
+    Multipliable,
+    Char,
 }
 
 struct Variable(usize);
@@ -43,14 +45,16 @@ impl Variant for LanguloVariant {
             (Int, Int) => Ok(Int),
             (Float, Float) => Ok(Float),
             (Str, Str) => Ok(Str),
+            (Char, Char) => Ok(Char),
 
-            (Addable, Int) | (Int, Addable) => Ok(Addable),
-            (Addable, Float) | (Float, Addable) => Ok(Addable),
-            (Addable, Str) | (Str, Addable) => Ok(Addable),
+            (Addable, Int) | (Int, Addable) => Ok(Int),
+            (Addable, Float) | (Float, Addable) => Ok(Float),
+            (Addable, Str) | (Str, Addable) => Ok(Str),
             (Addable, Addable) => Ok(Addable),
 
-            (Int, Repeatable) | (Repeatable, Int) => Ok(Repeatable),
-            (Int, Str) | (Str, Int) => Ok(Repeatable),
+            (Multipliable, Int) | (Int, Multipliable) => Ok(Int),
+            (Multipliable, Float) | (Float, Multipliable) => Ok(Float),
+            (Multipliable, Multipliable) => Ok(Multipliable),
 
             _ => Err(LanguloErr::typecheck(err))
         }?;
@@ -71,9 +75,10 @@ impl Constructable for LanguloVariant {
             Float => Ok(LanguloType::Float),
             Bool => Ok(LanguloType::Bool),
             Str => Ok(LanguloType::Str),
+            Char => Ok(LanguloType::Char),
             Any
-            |Addable
-            | Repeatable => Err(LanguloErr::typecheck("Could not identify type before construction".to_string())),
+            | Addable
+            | Multipliable => Err(LanguloErr::typecheck("Could not identify type before construction".to_string())),
         }
     }
 }

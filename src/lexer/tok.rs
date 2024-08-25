@@ -42,7 +42,7 @@ pub enum Tok {
     #[regex("true|false")]  Bool,
     #[regex(r"-?\d+")]      Int,
     #[regex(r"-?\d+\.\d+")] Float,
-    #[regex(r#""(?:[^"]|\\")*""#)] String,
+    #[regex(r#""(?:[^"]|\\")*""#)] Str,
     #[regex(r"'.'")]        Char,
 
     // arithmetic
@@ -160,7 +160,7 @@ mod tests {
         expect_lex("123 123.456 \"hello\" 'c' true false -2 ", &[
             Tok::Int, Tok::Whitespace,
             Tok::Float, Tok::Whitespace,
-            Tok::String, Tok::Whitespace,
+            Tok::Str, Tok::Whitespace,
             Tok::Char, Tok::Whitespace,
             Tok::Bool, Tok::Whitespace,
             Tok::Bool, Tok::Whitespace,

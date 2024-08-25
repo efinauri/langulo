@@ -3,7 +3,7 @@ use num_traits::ToPrimitive;
 use rowan::{GreenNode, NodeOrToken, SyntaxKind};
 
 #[derive(FromPrimitive, ToPrimitive, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Expr {
+pub enum AstNode {
     Root,
     Identifier,
     Literal,
@@ -14,13 +14,13 @@ pub enum Expr {
     Comment,
 }
 
-impl From<Expr> for SyntaxKind {
-    fn from(value: Expr) -> Self {
+impl From<AstNode> for SyntaxKind {
+    fn from(value: AstNode) -> Self {
         SyntaxKind(value.to_u16().unwrap())
     }
 }
 
-impl From<NodeOrToken<GreenNode, GreenNode>> for Expr {
+impl From<NodeOrToken<GreenNode, GreenNode>> for AstNode {
     fn from(value: NodeOrToken<GreenNode, GreenNode>) -> Self {
         value.into()
     }

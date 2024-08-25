@@ -3,7 +3,7 @@ mod tok_utils;
 use crate::errors::err::LanguloErr;
 use crate::lexer::tok::Tok;
 use crate::lexer::Lexer;
-use crate::syntax_tree::expr::Expr;
+use crate::syntax_tree::node::AstNode;
 use crate::syntax_tree::lang::LanguloSyntaxNode;
 use rowan::Checkpoint;
 
@@ -34,7 +34,7 @@ impl<'a> Parser<'a> {
         LanguloSyntaxNode::new_root(self.builder.finish())
     }
 
-    fn new_leaf_node(&mut self, expr: Expr, content: &str) -> Result<(), LanguloErr> {
+    fn new_leaf_node(&mut self, expr: AstNode, content: &str) -> Result<(), LanguloErr> {
         self.builder.start_node(expr.into());
         self.builder.token(expr.into(), content);
         self.builder.finish_node();
@@ -42,23 +42,23 @@ impl<'a> Parser<'a> {
     }
 
     fn new_binary_node(&mut self, content: &str, checkpoint: Checkpoint, precedence: u8) -> Result<(), LanguloErr> {
-        self.builder.start_node_at(checkpoint, Expr::Binary.into());
-        self.builder.token(Expr::Binary.into(), content);
+        self.builder.start_node_at(checkpoint, AstNode::Binary.into());
+        self.builder.token(AstNode::Binary.into(), content);
         self.parse_expr(precedence)?;
         self.builder.finish_node();
         Ok(())
     }
 
     fn new_unary_node(&mut self, content: &str, checkpoint: Checkpoint, precedence: u8) -> Result<(), LanguloErr> {
-        self.builder.start_node_at(checkpoint, Expr::Unary.into());
-        self.builder.token(Expr::Unary.into(), content);
+        self.builder.start_node_at(checkpoint, AstNode::Unary.into());
+        self.builder.token(AstNode::Unary.into(), content);
         self.parse_expr(precedence)?;
         self.builder.finish_node();
         Ok(())
     }
 
     pub fn parse(&mut self) -> Result<(), LanguloErr> {
-        self.builder.start_node(Expr::Root.into());
+        self.builder.start_node(AstNode::Root.into());
         self.parse_expr(0)?;
         self.builder.finish_node();
         Ok(())
@@ -108,18 +108,18 @@ impl<'a> Parser<'a> {
         self.skip_trivia()?;
         let (tok, content) = next!(self);
 
-        if matches!(tok, Tok::Int) { self.new_leaf_node(Expr::Int, content) } else { Ok(()) }
+        if matches!(tok, Tok::Int) { self.new_leaf_node(AstNode::Int, content) } else { Ok(()) }
     }
 
     fn skip_trivia(&mut self) -> Result<(), LanguloErr> {
         while let Some((tok, content)) = self.lexer.peek()? {
             match tok {
                 Tok::Whitespace => {
-                    self.builder.token(Expr::Whitespace.into(), content);
+                    self.builder.token(AstNode::Whitespace.into(), content);
                     self.lexer.next()?;
                 }
                 Tok::Comment => {
-                    self.builder.token(Expr::Comment.into(), content);
+                    self.builder.token(AstNode::Comment.into(), content);
                     self.lexer.next()?;
                 }
                 _ => break,

@@ -40,4 +40,12 @@ impl LanguloErr {
                 .with_labels(vec![Label::primary((), 0..0)]),
         }
     }
+
+    pub fn typecheck(msg: String) -> Self {
+        Self {
+            diagnostic: Diagnostic::error()
+                .with_message(format!("TypeError - {msg}"))
+                .with_labels(vec![Label::primary((), 0..0)])
+        }
+    }
 }

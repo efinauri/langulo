@@ -42,6 +42,12 @@ pub enum AstNode {
     TablePair,
     TypeTable,
     DefaultKey,
+    FunctionDecl,
+    PrincipalParam,
+    ContourParam,
+    FunctionAppl,
+    ContourArgs,
+    Lambda,
 }
 
 impl From<AstNode> for SyntaxKind {

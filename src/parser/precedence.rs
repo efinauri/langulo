@@ -1,6 +1,7 @@
 use crate::lexer::tok::Tok;
 
 impl Tok {
+
     pub fn precedence(&self) -> u8 {
         // a > b -> a must finish evaluating before b
         match self {
@@ -16,9 +17,10 @@ impl Tok {
             | Tok::Str
             | Tok::Char
             | Tok::Float
+            | Tok::Pipe
+            | Tok::LParen
             | Tok::LBrace
-            | Tok::RBracket
-            | Tok::LParen => 0,
+            | Tok::RBracket => 0,
             Tok::Assign => 10,
             Tok::And
             | Tok::Or

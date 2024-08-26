@@ -109,25 +109,16 @@ impl<'a> Parser<'a> {
             Tok::Bool => self.new_leaf_node(AstNode::Bool, content)?,
             Tok::Char => self.new_leaf_node(AstNode::Char, content)?,
             Tok::Str => self.new_leaf_node(AstNode::Str, content)?,
+            Tok::Identifier => self.new_leaf_node(AstNode::Identifier, content)?,
             Tok::Not => self.new_prefix_unary_node(AstNode::LogicalNot, &tok)?,
+            Tok::Pipe => self.parse_scope(AstNode::Lambda, Tok::Pipe)?,
             Tok::LParen => {
                 self.builder.start_node(AstNode::Grouping.into());
                 self.parse_expr(0, SemicolonPolicy::RequiredAbsent)?;
                 self.assert_tok(Tok::RParen)?;
                 self.builder.finish_node();
             }
-            Tok::LBrace => {
-                self.builder.start_node(AstNode::Scope.into());
-                while !matches!(self.lexer.peek()?, Some((Tok::RBrace, _))) {
-                    // since we don't know if this will be the last expr until we evaluate it,
-                    // disable semicolon evaluation in the recursive call, and do it manually after
-                    self.parse_expr(0, SemicolonPolicy::RequiredAbsent)?;
-                    let on_last_scope_expr = matches!(self.lexer.peek()?, Some((Tok::RBrace, _)));
-                    self.handle_semicolon(if !on_last_scope_expr { SemicolonPolicy::RequiredPresent } else { SemicolonPolicy::Optional })?;
-                }
-                self.assert_tok(Tok::RBrace)?;
-                self.builder.finish_node();
-            }
+            Tok::LBrace => self.parse_scope(AstNode::Scope, Tok::RBrace)?,
             Tok::If => {
                 self.builder.start_node(AstNode::If.into());
                 self.parse_expr(0, SemicolonPolicy::RequiredAbsent)?; // condition
@@ -177,11 +168,66 @@ impl<'a> Parser<'a> {
                 self.assert_tok(Tok::RBracket)?;
                 self.builder.finish_node();
             }
+            Tok::Fn => { // fn(@int, other int) int { it + other };
+                self.builder.start_node(AstNode::FunctionDecl.into());
+                self.assert_tok(Tok::LParen)?;
+                // optional @param, force it to be the first one
+                if matches!(self.lexer.peek()?, Some((Tok::At, _))) {
+                    self.builder.start_node(AstNode::PrincipalParam.into());
+                    next!(self);
+                    self.parse_type()?;
+                    self.builder.finish_node();
+                    if matches!(self.lexer.peek()?, Some((Tok::Comma, _))) { next!(self); }
+                }
+
+                // contour params
+                while !matches!(self.lexer.peek()?, Some((Tok::RParen, _))) {
+                    let param_name = self.assert_tok(Tok::Identifier)?;
+                    self.builder.start_node(AstNode::ContourParam.into());
+                    self.builder.token(AstNode::ContourParam.into(), param_name);
+                    self.parse_type()?;
+                    self.builder.finish_node();
+                    if matches!(self.lexer.peek()?, Some((Tok::Comma, _))) { next!(self); } else { break; }
+                }
+                self.assert_tok(Tok::RParen)?;
+                // return type
+                self.parse_type()?;
+                // body
+                self.assert_tok(Tok::LBrace)?;
+                self.parse_scope(AstNode::Scope, Tok::RBrace)?;
+                self.builder.finish_node();
+            }
+            Tok::At => { // @add(1, 2);
+                self.builder.start_node(AstNode::FunctionAppl.into());
+                self.parse_expr(0, SemicolonPolicy::RequiredAbsent)?;
+                self.assert_tok(Tok::LParen)?;
+
+                self.builder.start_node(AstNode::ContourArgs.into());
+                self.parse_comma_separated_exprs()?;
+                self.builder.finish_node();
+                self.assert_tok(Tok::RParen)?;
+
+                self.builder.finish_node();
+            }
 
             _ => return Err(LanguloErr::semantic(
                 &*format!("Expected a literal or prefix operator, but found {}", content)
             ))
         }
+        Ok(())
+    }
+
+    fn parse_scope(&mut self, scope_kind: AstNode, end_tok: Tok) -> Result<(), LanguloErr> {
+        self.builder.start_node(scope_kind.into());
+        while !matches!(self.lexer.peek()?, Some((bind, _)) if bind == &end_tok) {
+            // since we don't know if this will be the last expr until we evaluate it,
+            // disable semicolon evaluation in the recursive call, and do it manually after
+            self.parse_expr(0, SemicolonPolicy::RequiredAbsent)?;
+            let on_last_scope_expr = matches!(self.lexer.peek()?, Some((bind, _)) if bind == &end_tok);
+            self.handle_semicolon(if !on_last_scope_expr { SemicolonPolicy::RequiredPresent } else { SemicolonPolicy::Optional })?;
+        }
+        self.assert_tok(end_tok)?;
+        self.builder.finish_node();
         Ok(())
     }
 
@@ -198,9 +244,36 @@ impl<'a> Parser<'a> {
             Tok::And => self.new_binary_node(AstNode::LogicalAnd, checkpoint, precedence)?,
             Tok::Or => self.new_binary_node(AstNode::LogicalOr, checkpoint, precedence)?,
             Tok::Else => self.new_binary_node(AstNode::Else, checkpoint, precedence)?,
+            Tok::At => { // 3@plus(2);
+                self.builder.start_node_at(checkpoint, AstNode::FunctionAppl.into());
+
+                // fn body
+                self.parse_expr(tok.precedence(), SemicolonPolicy::RequiredAbsent)?;
+
+                if matches!(self.lexer.peek()?, Some((Tok::LParen, _))) {
+                    next!(self);
+                    // contour args
+                    self.builder.start_node(AstNode::ContourArgs.into());
+                    self.parse_comma_separated_exprs()?;
+                    self.assert_tok(Tok::RParen)?;
+                    self.builder.finish_node();
+                }
+
+                self.builder.finish_node();
+            }
             _ => return Err(LanguloErr::semantic(
                 &*format!("Expected an infix or postfix operator, but found {}", content)
             ))
+        }
+        Ok(())
+    }
+
+    fn parse_comma_separated_exprs(&mut self) -> Result<(), LanguloErr> {
+        while !matches!(self.lexer.peek()?, Some((Tok::RParen, _))) {
+            self.parse_expr(0, SemicolonPolicy::RequiredAbsent)?;
+            if matches!(self.lexer.peek()?, Some((Tok::Comma, _))) {
+                next!(self);
+            } else { break; }
         }
         Ok(())
     }
@@ -384,6 +457,46 @@ mod tests {
             (<Int:3> <TablePair:3> <Int:4>), \
             (<DefaultKey:_> <TablePair:_> <Int:1000>)\
             ])",
+        )
+    }
+
+    #[test]
+    fn plain_identifier() {
+        expect_parser("a", "<Identifier:a>")
+    }
+
+    #[test]
+    fn functions_and_lambdas() {
+        // todo missing function type hint
+        // standard declaration with principal argument
+        expect_parser(
+            "fn(@int, other int) int { it + other };",
+            "(<FunctionDecl:int> [\
+            (<PrincipalParam:int> <TypeInt:int>), \
+            (<ContourParam:other> <TypeInt:int>), \
+            <TypeInt:int>, \
+            (<Scope:it> (<Identifier:it> <Add:it> <Identifier:other>))\
+            ])",
+        );
+        // fn application with @arg
+        expect_parser(
+            "3 @plus(2, 1, 0);",
+            "(<FunctionAppl:3> [<Int:3>, <Identifier:plus>, (<ContourArgs:2> [\
+            <Int:2>, <Int:1>, <Int:0>]\
+            )])",
+        );
+        // () is optional if there's an @arg and no contour args
+        expect_parser("3@repeat", "(<Int:3> <FunctionAppl:3repeat> <Identifier:repeat>)");
+
+        // fn application without @arg
+        expect_parser(
+            "@noop(3);",
+            "(<Identifier:noop> <FunctionAppl:noop3> (<ContourArgs:3> <Int:3>))",
+        );
+        // lambda declaration
+        expect_parser(
+            "|it|",
+            "(<Lambda:it> <Identifier:it>)",
         )
     }
 }

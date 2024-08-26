@@ -13,7 +13,6 @@ pub type ASTBuilder = rowan::GreenNodeBuilder<'static>;
 pub struct Parser<'a> {
     lexer: Lexer<'a>,
     builder: ASTBuilder,
-    semicolon_required: bool
 }
 
 // macro to avoid double mut borrow
@@ -24,12 +23,18 @@ macro_rules! next {
     }};
 }
 
+#[derive(Debug)]
+enum SemicolonPolicy {
+    RequiredPresent,
+    RequiredAbsent,
+    Optional,
+}
+
 impl<'a> Parser<'a> {
     pub fn new(input: &'a str) -> Self {
         Self {
             lexer: Lexer::new(input),
             builder: ASTBuilder::new(),
-            semicolon_required: true,
         }
     }
 
@@ -46,21 +51,21 @@ impl<'a> Parser<'a> {
 
     fn new_binary_node(&mut self, kind: AstNode, checkpoint: Checkpoint, precedence: u8) -> Result<(), LanguloErr> {
         self.builder.start_node_at(checkpoint, kind.into());
-        self.parse_expr(precedence)?;
+        self.parse_expr(precedence, SemicolonPolicy::RequiredAbsent)?;
         self.builder.finish_node();
         Ok(())
     }
 
     fn new_prefix_unary_node(&mut self, kind: AstNode, tok: &Tok) -> Result<(), LanguloErr> {
         self.builder.start_node(kind.into());
-        self.parse_expr(tok.precedence())?;
+        self.parse_expr(tok.precedence(), SemicolonPolicy::RequiredAbsent)?;
         self.builder.finish_node();
         Ok(())
     }
 
     fn new_postfix_unary_node(&mut self, kind: AstNode, checkpoint: Checkpoint, precedence: u8) -> Result<(), LanguloErr> {
         self.builder.start_node_at(checkpoint, kind.into());
-        self.parse_expr(precedence)?;
+        self.parse_expr(precedence, SemicolonPolicy::RequiredAbsent)?;
         self.builder.finish_node();
         Ok(())
     }
@@ -68,14 +73,13 @@ impl<'a> Parser<'a> {
     pub fn parse(&mut self) -> Result<(), LanguloErr> {
         self.builder.start_node(AstNode::Root.into());
         while self.lexer.peek()?.is_some() {
-            self.parse_expr(0)?;
-            self.handle_semicolon()?;
+            self.parse_expr(0, SemicolonPolicy::RequiredPresent)?;
         }
         self.builder.finish_node();
         Ok(())
     }
 
-    pub fn parse_expr(&mut self, precedence: u8) -> Result<(), LanguloErr> {
+    fn parse_expr(&mut self, precedence: u8, check_semicolon: SemicolonPolicy) -> Result<(), LanguloErr> {
         self.skip_trivia()?;
         let checkpoint = self.builder.checkpoint();
 
@@ -91,7 +95,7 @@ impl<'a> Parser<'a> {
 
             self.parse_postfix(checkpoint, tok_precedence)?;
         }
-
+        self.handle_semicolon(check_semicolon)?;
         Ok(())
     }
 
@@ -106,6 +110,74 @@ impl<'a> Parser<'a> {
             Tok::Char => self.new_leaf_node(AstNode::Char, content)?,
             Tok::Str => self.new_leaf_node(AstNode::Str, content)?,
             Tok::Not => self.new_prefix_unary_node(AstNode::LogicalNot, &tok)?,
+            Tok::LParen => {
+                self.builder.start_node(AstNode::Grouping.into());
+                self.parse_expr(0, SemicolonPolicy::RequiredAbsent)?;
+                self.assert_tok(Tok::RParen)?;
+                self.builder.finish_node();
+            }
+            Tok::LBrace => {
+                self.builder.start_node(AstNode::Scope.into());
+                while !matches!(self.lexer.peek()?, Some((Tok::RBrace, _))) {
+                    // since we don't know if this will be the last expr until we evaluate it,
+                    // disable semicolon evaluation in the recursive call, and do it manually after
+                    self.parse_expr(0, SemicolonPolicy::RequiredAbsent)?;
+                    let on_last_scope_expr = matches!(self.lexer.peek()?, Some((Tok::RBrace, _)));
+                    self.handle_semicolon(if !on_last_scope_expr { SemicolonPolicy::RequiredPresent } else { SemicolonPolicy::Optional })?;
+                }
+                self.assert_tok(Tok::RBrace)?;
+                self.builder.finish_node();
+            }
+            Tok::If => {
+                self.builder.start_node(AstNode::If.into());
+                self.parse_expr(0, SemicolonPolicy::RequiredAbsent)?; // condition
+                self.parse_expr(tok.precedence(), SemicolonPolicy::Optional)?; // body
+                self.builder.finish_node();
+            }
+            Tok::Var => {
+                self.builder.start_node(AstNode::VarDecl.into());
+                let var_name = self.assert_tok(Tok::Identifier)?;
+                self.builder.token(AstNode::VarDecl.into(), var_name);
+                // optional type hint
+                if matches!(self.lexer.peek()?, Some((Tok::Colon, _))) {
+                    next!(self);
+                    self.parse_type()?;
+                }
+                self.assert_tok(Tok::Assign)?;
+                self.parse_expr(0, SemicolonPolicy::RequiredAbsent)?;
+                self.builder.finish_node();
+            }
+            Tok::LBracket => { // table value
+                self.builder.start_node(AstNode::Table.into());
+                let mut seen_default_key = false;
+
+                while !matches!(self.lexer.peek()?, Some((Tok::RBracket, _))) {
+                    self.builder.start_node(AstNode::TablePair.into());
+                    self.skip_trivia()?;
+                    // parse key paying attention to default key
+                    if matches!(self.lexer.peek()?, Some((Tok::Underscore, _))) {
+                        if seen_default_key {
+                            return Err(LanguloErr::semantic("Default key already defined"));
+                        }
+                        next!(self);
+                        seen_default_key = true;
+                        self.new_leaf_node(AstNode::DefaultKey, "_")?;
+                    } else {
+                        self.parse_expr(0, SemicolonPolicy::RequiredAbsent)?;
+                    }
+
+                    self.assert_tok(Tok::Colon)?;
+                    self.parse_expr(0, SemicolonPolicy::RequiredAbsent)?;
+                    self.builder.finish_node();
+
+                    if matches!(self.lexer.peek()?, Some((Tok::Comma, _))) {
+                        next!(self);
+                    } else { break; }
+                }
+                self.assert_tok(Tok::RBracket)?;
+                self.builder.finish_node();
+            }
+
             _ => return Err(LanguloErr::semantic(
                 &*format!("Expected a literal or prefix operator, but found {}", content)
             ))
@@ -125,9 +197,33 @@ impl<'a> Parser<'a> {
             Tok::Modulo => self.new_binary_node(AstNode::Modulo, checkpoint, precedence)?,
             Tok::And => self.new_binary_node(AstNode::LogicalAnd, checkpoint, precedence)?,
             Tok::Or => self.new_binary_node(AstNode::LogicalOr, checkpoint, precedence)?,
+            Tok::Else => self.new_binary_node(AstNode::Else, checkpoint, precedence)?,
             _ => return Err(LanguloErr::semantic(
                 &*format!("Expected an infix or postfix operator, but found {}", content)
             ))
+        }
+        Ok(())
+    }
+
+    fn parse_type(&mut self) -> Result<(), LanguloErr> {
+        self.skip_trivia()?;
+        let (tok, content) = next!(self);
+        match tok {
+            Tok::TypeChar => self.new_leaf_node(AstNode::TypeChar, content)?,
+            Tok::TypeInt => self.new_leaf_node(AstNode::TypeInt, content)?,
+            Tok::TypeFloat => self.new_leaf_node(AstNode::TypeFloat, content)?,
+            Tok::TypeBool => self.new_leaf_node(AstNode::TypeBool, content)?,
+            Tok::TypeStr => self.new_leaf_node(AstNode::TypeStr, content)?,
+            Tok::LBracket => {
+                self.builder.start_node(AstNode::TypeTable.into());
+                // [int:char]
+                self.parse_type()?;
+                self.assert_tok(Tok::Colon)?;
+                self.parse_type()?;
+                self.assert_tok(Tok::RBracket)?;
+                self.builder.finish_node();
+            }
+            _ => return Err(LanguloErr::semantic(&*format!("Expected a type annotation, but found {:?}", tok))),
         }
         Ok(())
     }
@@ -149,17 +245,37 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn handle_semicolon(&mut self) -> Result<(), LanguloErr> {
-        let next_is_semicolon = matches! { self.lexer.peek()?, Some((Tok::Semicolon, _)) };
-        if next_is_semicolon {
-            next!(self);
-            return Ok(());
+    fn handle_semicolon(&mut self, policy: SemicolonPolicy) -> Result<(), LanguloErr> {
+        // semicolons at eof are optional
+        let some_tok = match self.lexer.peek()? {
+            Some(tok) => tok,
+            None => { return Ok(()) }
         };
-        if self.semicolon_required {
-            return Err(LanguloErr::semantic("Expected the expression to end"));
+        let next_is_semicolon = matches! { some_tok, (Tok::Semicolon, _) };
+        match (policy, next_is_semicolon) {
+            // this first condition maps to ok because the matched semicolon could be required by
+            // the upper part of the call stack
+            (SemicolonPolicy::RequiredAbsent, true)
+            | (SemicolonPolicy::RequiredAbsent, false)
+            | (SemicolonPolicy::Optional, false) => Ok(()),
+            (SemicolonPolicy::RequiredPresent, false) => Err(LanguloErr::semantic("Expected end of expression")),
+            (SemicolonPolicy::RequiredPresent, true)
+            | (SemicolonPolicy::Optional, true) => {
+                next!(self);
+                Ok(())
+            }
         }
-        self.semicolon_required = true;
-        Ok(())
+    }
+
+    fn assert_tok(&mut self, tok: Tok) -> Result<&'a str, LanguloErr> {
+        self.skip_trivia()?;
+        println!("checking if {:?} matches {:?}", tok, self.lexer.peek()?);
+        let matches = matches!(self.lexer.peek()?, Some((bind, _)) if bind == &tok);
+        if matches {
+            let (_, content) = next!(self);
+            return Ok(content);
+        }
+        Err(LanguloErr::semantic(&*format!("Expected {:?}", tok)))
     }
 }
 
@@ -172,12 +288,19 @@ mod tests {
         let children: Vec<String> = node.children().map(|c| to_simplified_string(&c)).collect();
         if node.kind() == AstNode::Root { return children.join("\n"); }
 
+        let tok_str = node.text().to_string();
+        let tok_str = tok_str.trim().split_whitespace().next().unwrap_or("");
+        format!("<{:?}:{}>", node.kind(), tok_str);
+        let node_fmt = format!("<{:?}:{}>", node.kind(), tok_str);
+
         if children.is_empty() {
-            format!("{}", node.text()) // Assuming `text()` returns the string content for leaf nodes
+            node_fmt
         } else if children.len() == 1 {
-            format!("({:?} {})", node.kind(), children[0])
+            format!("({} {})", node_fmt, children[0])
+        } else if children.len() == 2 {
+            format!("({} {} {})", children[0], node_fmt, children[1])
         } else {
-            format!("({} {:?} {})", children[0], node.kind(), children[1])
+            format!("({} [{}])", node_fmt, children.join(", "))
         }
     }
 
@@ -192,24 +315,75 @@ mod tests {
     #[test]
     fn arithmetic() {
         expect_parser(
-            "1 + 2 * 3;",
-            "(1 Add (2 Multiply 3))",
-        )
+            "1 + 2 * (5 - 3);",
+            "(<Int:1> <Add:1> (<Int:2> <Multiply:2> (<Grouping:5> (<Int:5> <Subtract:5> <Int:3>))))")
     }
 
     #[test]
     fn logical() {
-        expect_parser(
-            "true and not false;",
-            "(true LogicalAnd (LogicalNot false))",
-        )
+        expect_parser("true and not false;", "(<Bool:true> <LogicalAnd:true> (<LogicalNot:false> <Bool:false>))")
     }
 
     #[test]
     fn multiexpr_program() {
         expect_parser(
             "1+2*3; true and not false;",
-            "(1 Add (2 Multiply 3))\n(true LogicalAnd (LogicalNot false))",
+            "(<Int:1> <Add:123> (<Int:2> <Multiply:23> <Int:3>))\n(<Bool:true> <LogicalAnd:true> (<LogicalNot:false> <Bool:false>))",
+        )
+    }
+
+    #[test]
+    fn scope() {
+        expect_parser("{1; 2; 3;};", "(<Scope:1> [<Int:1>, <Int:2>, <Int:3>])");
+        // semicolon on the last expr is optional
+        expect_parser("{1; 2; 3};", "(<Scope:1> [<Int:1>, <Int:2>, <Int:3>])")
+    }
+
+    #[test]
+    fn if_else() {
+        expect_parser(
+            "if true {1} else {2};",
+            "((<Bool:true> <If:true> (<Scope:1> <Int:1>)) <Else:true> (<Scope:2> <Int:2>))",
+        )
+    }
+
+    #[test]
+    fn variable_decl() {
+        expect_parser(
+            "var x = 5;",
+            "(<VarDecl:x> <Int:5>)",
+        );
+        // with type hint
+        expect_parser(
+            "var x: int = 5;",
+            "(<TypeInt:int> <VarDecl:x> <Int:5>)",
+        )
+    }
+
+    #[test]
+    fn table_decl_and_usage() {
+        // base situation
+        expect_parser(
+            "var tbl = [1: 'a', 2: 'b', 3: 'c'];",
+            "(<VarDecl:tbl> (<Table:1> [\
+            (<Int:1> <TablePair:1> <Char:'a'>), \
+            (<Int:2> <TablePair:2> <Char:'b'>), \
+            (<Int:3> <TablePair:3> <Char:'c'>)\
+            ]))",
+        );
+        // with type hint
+        expect_parser(
+            "var tbl: [int:char] = [];",
+            "((<TypeInt:int> <TypeTable:intchar> <TypeChar:char>) <VarDecl:tbl> <Table:>)",
+        );
+        // with default arm
+        expect_parser(
+            "[1: 2, 3: 4, _: 1000]",
+            "(<Table:1> [\
+            (<Int:1> <TablePair:1> <Int:2>), \
+            (<Int:3> <TablePair:3> <Int:4>), \
+            (<DefaultKey:_> <TablePair:_> <Int:1000>)\
+            ])",
         )
     }
 }

@@ -2,9 +2,23 @@ use crate::lexer::tok::Tok;
 
 impl Tok {
     pub fn precedence(&self) -> u8 {
+        // a > b -> a must finish evaluating before b
         match self {
-            Tok::Int
-            | Tok::Semicolon => 0,
+            // tokens to not consider as operators
+            Tok::Semicolon
+            | Tok::RBrace
+            | Tok::RParen
+            | Tok::Colon
+            | Tok::Comma
+            // start of expressions
+            | Tok::Int
+            | Tok::Bool
+            | Tok::Str
+            | Tok::Char
+            | Tok::Float
+            | Tok::LBrace
+            | Tok::RBracket
+            | Tok::LParen => 0,
             Tok::Assign => 10,
             Tok::And
             | Tok::Or
@@ -22,10 +36,10 @@ impl Tok {
             Tok::Caret => 80,
             Tok::Dollar => 90,
             Tok::As => 100,
+            Tok::Else => 109,
             Tok::Bang
             | Tok::Question
-            | Tok::If
-            | Tok::Else => 110,
+            | Tok::If => 110,
             Tok::Iter => 120,
             Tok::At => 130,
             _ => unimplemented!("must explicitly set a precedence for operator {:?} ", self)

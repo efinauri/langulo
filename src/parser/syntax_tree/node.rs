@@ -27,6 +27,21 @@ pub enum AstNode {
     // unary
     LogicalNot,
     Modulo,
+    Grouping,
+    Scope,
+    Else,
+    If,
+    VarDecl,
+    TypeAnnotation,
+    TypeChar,
+    TypeInt,
+    TypeFloat,
+    TypeBool,
+    TypeStr,
+    Table,
+    TablePair,
+    TypeTable,
+    DefaultKey,
 }
 
 impl From<AstNode> for SyntaxKind {

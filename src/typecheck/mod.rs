@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use fxhash::FxHashMap;
 use crate::parser::syntax_tree::lang::{NodeId, LanguloSyntaxNode, LanguloSyntaxNodeExt};
 use crate::parser::syntax_tree::node::AstNode;
 use crate::typecheck::types::{LanguloType, LanguloVariant};
@@ -8,7 +8,7 @@ use crate::errors::err::LanguloErr;
 mod types;
 
 pub struct TypeChecker {
-    node_to_key: HashMap<NodeId, TcKey>,
+    node_to_key: FxHashMap<NodeId, TcKey>,
     key_to_type: TypeTable<LanguloVariant>,
 }
 
@@ -33,7 +33,7 @@ macro_rules! assert_children_count {
 impl TypeChecker {
     pub fn new() -> Self {
         Self {
-            node_to_key: HashMap::new(),
+            node_to_key: Default::default(),
             key_to_type: Default::default(),
         }
     }
@@ -48,7 +48,6 @@ impl TypeChecker {
 
     /// also runs assert on the expected structure of the AST while typechecking
     pub fn typecheck(&mut self, root: &LanguloSyntaxNode) -> Result<(), LanguloErr> {
-
         let mut tc = VarlessTypeChecker::new();
         self.tc_node(&mut tc, &root)
             .map_err(|_| LanguloErr::typecheck("todo".to_string()))?;
@@ -79,6 +78,11 @@ impl TypeChecker {
             AstNode::Bool => tc.impose(key.concretizes_explicit(LanguloVariant::Bool))?,
             AstNode::Str => tc.impose(key.concretizes_explicit(LanguloVariant::Str))?,
             AstNode::Char => tc.impose(key.concretizes_explicit(LanguloVariant::Char))?,
+            AstNode::Grouping => {
+                assert_children_count!(node, 1);
+                let inner = self.tc_node(tc, &node.first_child().unwrap())?;
+                tc.impose(key.concretizes(inner))?;
+            }
 
             AstNode::Add => {
                 assert_children_count!(node, 2);
@@ -104,6 +108,18 @@ impl TypeChecker {
             AstNode::LogicalXor => unimplemented!(),
             AstNode::LogicalNot => unimplemented!(),
             AstNode::Modulo => unimplemented!(),
+            // todo added while implementing parser
+            AstNode::Scope => unimplemented!(),
+            AstNode::Else => unimplemented!(),
+            AstNode::If => unimplemented!(),
+            AstNode::VarDecl => unimplemented!(),
+            AstNode::TypeAnnotation => unimplemented!(),
+            AstNode::TypeChar => unimplemented!(),
+            AstNode::TypeInt => unimplemented!(),
+            AstNode::TypeFloat => unimplemented!(),
+            AstNode::TypeBool => unimplemented!(),
+            AstNode::TypeStr => unimplemented!(),
+            _ => unimplemented!("todo: write type checking for node type {:?}", node),
         }
         self.node_to_key.insert(node.id(), key);
         Ok(key)

@@ -12,6 +12,7 @@ pub enum Tok {
     #[regex("\\)")]         RParen,
     #[regex("\\[")]         LBracket,
     #[regex("\\]")]         RBracket,
+    #[regex(":")]           Colon,
     #[regex("\\{")]         LBrace,
     #[regex("}")]           RBrace,
 
@@ -34,7 +35,7 @@ pub enum Tok {
     // primitive types
     #[regex("int")]         TypeInt,
     #[regex("float")]       TypeFloat,
-    #[regex("str")]         TypeString,
+    #[regex("str")]         TypeStr,
     #[regex("bool")]        TypeBool,
     #[regex("char")]        TypeChar,
 
@@ -120,11 +121,12 @@ mod tests {
 
     #[test]
     fn punctuation_and_others() {
-        expect_lex(",;.|$ as hello", &[
+        expect_lex(",;.|:$ as hello", &[
             Tok::Comma,
             Tok::Semicolon,
             Tok::Dot,
             Tok::Pipe,
+            Tok::Colon,
             Tok::Dollar, Tok::Whitespace,
             Tok::As, Tok::Whitespace,
             Tok::Identifier]);
@@ -149,7 +151,7 @@ mod tests {
         expect_lex("int float str bool char ", &[
             Tok::TypeInt, Tok::Whitespace,
             Tok::TypeFloat, Tok::Whitespace,
-            Tok::TypeString, Tok::Whitespace,
+            Tok::TypeStr, Tok::Whitespace,
             Tok::TypeBool, Tok::Whitespace,
             Tok::TypeChar, Tok::Whitespace,
         ])

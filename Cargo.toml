@@ -24,4 +24,7 @@ colored = "2.1.0"
 codespan-reporting = "0.11.1"
 log = "0.4.22"
 
+# fast hashmap
+fxhash = "0.2.1"
+
 [dev-dependencies]

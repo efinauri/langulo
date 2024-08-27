@@ -1,6 +1,6 @@
 use num_traits::{FromPrimitive, ToPrimitive};
 use rowan::{Language, SyntaxKind, SyntaxNode, TextRange};
-use crate::parser::syntax_tree::node::AstNode;
+use crate::parser::ast::node::AstNode;
 
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum Langulo {}

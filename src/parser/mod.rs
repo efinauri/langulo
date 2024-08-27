@@ -1,11 +1,11 @@
 mod precedence;
-pub mod syntax_tree;
+pub mod ast;
 
 use crate::errors::err::LanguloErr;
 use crate::lexer::tok::Tok;
 use crate::lexer::Lexer;
-use crate::parser::syntax_tree::lang::LanguloSyntaxNode;
-use crate::parser::syntax_tree::node::AstNode;
+use crate::parser::ast::lang::LanguloSyntaxNode;
+use crate::parser::ast::node::AstNode;
 use rowan::Checkpoint;
 
 pub type ASTBuilder = rowan::GreenNodeBuilder<'static>;
@@ -18,7 +18,9 @@ pub struct Parser<'a> {
 // macro to avoid double mut borrow
 macro_rules! next {
     ($self:expr) => {{
+        $self.skip_trivia()?;
         let result = $self.lexer.next()?.ok_or_else(|| LanguloErr::semantic("Unexpected EOF"))?;
+        $self.skip_trivia()?;
         result
     }};
 }
@@ -65,7 +67,6 @@ impl<'a> Parser<'a> {
 
     fn new_postfix_unary_node(&mut self, kind: AstNode, checkpoint: Checkpoint, precedence: u8) -> Result<(), LanguloErr> {
         self.builder.start_node_at(checkpoint, kind.into());
-        self.parse_expr(precedence, SemicolonPolicy::RequiredAbsent)?;
         self.builder.finish_node();
         Ok(())
     }
@@ -80,13 +81,11 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self, precedence: u8, check_semicolon: SemicolonPolicy) -> Result<(), LanguloErr> {
-        self.skip_trivia()?;
         let checkpoint = self.builder.checkpoint();
 
         self.parse_prefix()?;
 
         loop {
-            self.skip_trivia()?;
             let tok_precedence = match self.lexer.peek()? {
                 Some((tok, _)) => tok.precedence(),
                 None => break,
@@ -100,7 +99,6 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_prefix(&mut self) -> Result<(), LanguloErr> {
-        self.skip_trivia()?;
         let (tok, content) = next!(self);
 
         match tok {
@@ -144,7 +142,6 @@ impl<'a> Parser<'a> {
 
                 while !matches!(self.lexer.peek()?, Some((Tok::RBracket, _))) {
                     self.builder.start_node(AstNode::TablePair.into());
-                    self.skip_trivia()?;
                     // parse key paying attention to default key
                     if matches!(self.lexer.peek()?, Some((Tok::Underscore, _))) {
                         if seen_default_key {
@@ -232,7 +229,6 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_postfix(&mut self, checkpoint: Checkpoint, precedence: u8) -> Result<(), LanguloErr> {
-        self.skip_trivia()?;
         let (tok, content) = next!(self);
 
         match tok {
@@ -244,6 +240,7 @@ impl<'a> Parser<'a> {
             Tok::And => self.new_binary_node(AstNode::LogicalAnd, checkpoint, precedence)?,
             Tok::Or => self.new_binary_node(AstNode::LogicalOr, checkpoint, precedence)?,
             Tok::Else => self.new_binary_node(AstNode::Else, checkpoint, precedence)?,
+            Tok::Question => self.new_postfix_unary_node(AstNode::Option, checkpoint, precedence)?,
             Tok::At => { // 3@plus(2);
                 self.builder.start_node_at(checkpoint, AstNode::FunctionAppl.into());
 
@@ -279,7 +276,8 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_type(&mut self) -> Result<(), LanguloErr> {
-        self.skip_trivia()?;
+        let checkpoint = self.builder.checkpoint();
+
         let (tok, content) = next!(self);
         match tok {
             Tok::TypeChar => self.new_leaf_node(AstNode::TypeChar, content)?,
@@ -287,6 +285,31 @@ impl<'a> Parser<'a> {
             Tok::TypeFloat => self.new_leaf_node(AstNode::TypeFloat, content)?,
             Tok::TypeBool => self.new_leaf_node(AstNode::TypeBool, content)?,
             Tok::TypeStr => self.new_leaf_node(AstNode::TypeStr, content)?,
+            Tok::Fn => { // fn(@int, str, char, ->bool)
+                self.builder.start_node(AstNode::TypeFn.into());
+                self.assert_tok(Tok::LParen)?;
+                // don't include @type in contour types
+                if matches!(self.lexer.peek()?, Some((Tok::At, _))) {
+                    next!(self);
+                    self.parse_type()?;
+                    // this can be asserted because a return type must be annotated
+                    self.assert_tok(Tok::Comma)?;
+                }
+                self.builder.start_node(AstNode::ContourTypes.into());
+                while !matches!(self.lexer.peek()?, Some((Tok::Minus, _))) {
+                    self.parse_type()?;
+                    self.assert_tok(Tok::Comma)?;
+                    if matches!(self.lexer.peek()?, Some((Tok::Minus, _))) { break; }
+                }
+                self.builder.finish_node();
+                // return type
+                self.assert_tok(Tok::Minus)?;
+                self.assert_tok(Tok::GreaterThan)?;
+                self.parse_type()?;
+
+                self.assert_tok(Tok::RParen)?;
+                self.builder.finish_node();
+            }
             Tok::LBracket => {
                 self.builder.start_node(AstNode::TypeTable.into());
                 // [int:char]
@@ -297,6 +320,13 @@ impl<'a> Parser<'a> {
                 self.builder.finish_node();
             }
             _ => return Err(LanguloErr::semantic(&*format!("Expected a type annotation, but found {:?}", tok))),
+        }
+
+        // ? is the only postfix type annotation so explicit precedence handling is not needed
+        while matches!(self.lexer.peek()?, Some((Tok::Question, _))) {
+            next!(self);
+            self.builder.start_node_at(checkpoint, AstNode::TypeOption.into());
+            self.builder.finish_node();
         }
         Ok(())
     }
@@ -341,7 +371,6 @@ impl<'a> Parser<'a> {
     }
 
     fn assert_tok(&mut self, tok: Tok) -> Result<&'a str, LanguloErr> {
-        self.skip_trivia()?;
         println!("checking if {:?} matches {:?}", tok, self.lexer.peek()?);
         let matches = matches!(self.lexer.peek()?, Some((bind, _)) if bind == &tok);
         if matches {
@@ -355,7 +384,7 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::syntax_tree::lang::LanguloSyntaxNode;
+    use crate::parser::ast::lang::LanguloSyntaxNode;
 
     pub fn to_simplified_string(node: &LanguloSyntaxNode) -> String {
         let children: Vec<String> = node.children().map(|c| to_simplified_string(&c)).collect();
@@ -416,7 +445,7 @@ mod tests {
     fn if_else() {
         expect_parser(
             "if true {1} else {2};",
-            "((<Bool:true> <If:true> (<Scope:1> <Int:1>)) <Else:true> (<Scope:2> <Int:2>))",
+            "((<Bool:true> <If:true1> (<Scope:1> <Int:1>)) <Else:true1> (<Scope:2> <Int:2>))",
         )
     }
 
@@ -467,13 +496,12 @@ mod tests {
 
     #[test]
     fn functions_and_lambdas() {
-        // todo missing function type hint
         // standard declaration with principal argument
         expect_parser(
             "fn(@int, other int) int { it + other };",
             "(<FunctionDecl:int> [\
             (<PrincipalParam:int> <TypeInt:int>), \
-            (<ContourParam:other> <TypeInt:int>), \
+            (<ContourParam:otherint> <TypeInt:int>), \
             <TypeInt:int>, \
             (<Scope:it> (<Identifier:it> <Add:it> <Identifier:other>))\
             ])",
@@ -481,7 +509,7 @@ mod tests {
         // fn application with @arg
         expect_parser(
             "3 @plus(2, 1, 0);",
-            "(<FunctionAppl:3> [<Int:3>, <Identifier:plus>, (<ContourArgs:2> [\
+            "(<FunctionAppl:3plus2> [<Int:3>, <Identifier:plus>, (<ContourArgs:2> [\
             <Int:2>, <Int:1>, <Int:0>]\
             )])",
         );
@@ -497,6 +525,20 @@ mod tests {
         expect_parser(
             "|it|",
             "(<Lambda:it> <Identifier:it>)",
+        );
+        // type hint declaration
+        expect_parser(
+            "var add: fn(@int, int, ->int) = etc;",
+            "((<TypeFn:int> [<TypeInt:int>, (<ContourTypes:int> <TypeInt:int>), <TypeInt:int>]) <VarDecl:add> <Identifier:etc>)",
+        )
+    }
+    #[test]
+    fn options() {
+        expect_parser("3???;", "(<Option:3> (<Option:3> (<Option:3> <Int:3>)))");
+        // decl with type hint
+        expect_parser(
+            "var x: int? = 3?;",
+            "((<TypeOption:int> <TypeInt:int>) <VarDecl:x> (<Option:3> <Int:3>))",
         )
     }
 }

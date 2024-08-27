@@ -48,6 +48,10 @@ pub enum AstNode {
     FunctionAppl,
     ContourArgs,
     Lambda,
+    TypeFn,
+    ContourTypes,
+    Option,
+    TypeOption,
 }
 
 impl From<AstNode> for SyntaxKind {

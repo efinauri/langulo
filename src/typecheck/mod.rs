@@ -1,6 +1,6 @@
 use fxhash::FxHashMap;
-use crate::parser::syntax_tree::lang::{NodeId, LanguloSyntaxNode, LanguloSyntaxNodeExt};
-use crate::parser::syntax_tree::node::AstNode;
+use crate::parser::ast::lang::{NodeId, LanguloSyntaxNode, LanguloSyntaxNodeExt};
+use crate::parser::ast::node::AstNode;
 use crate::typecheck::types::{LanguloType, LanguloVariant};
 use rusttyc::{TcErr, TcKey, TypeTable, VarlessTypeChecker};
 use crate::errors::err::LanguloErr;

@@ -3,13 +3,16 @@ use crate::errors::err::LanguloErr;
 use crate::vm::instruction::{Instruction, OpCode, Value};
 
 pub mod instruction;
+mod tagged_value;
+mod garbage_collector;
 
 macro_rules! run_binary {
     ($vm:expr, $op:expr) => {{
+        debug_assert!($vm.stack.len() >= 2);
         let b = $vm.pop_value();
         let a = $vm.pop_value();
-        $vm.stack.push_back($op(a, b));
-    }};
+        $vm.stack.push_back($op(a, b))
+    }}
 }
 
 
@@ -37,6 +40,7 @@ impl VM {
         loop {
             let current = &self.instructions[self.ip];
             self.ip += 1;
+            debug_assert!(self.ip <= self.instructions.len());
             match current.opcode() {
                 OpCode::Return => break,
                 OpCode::Negate => {

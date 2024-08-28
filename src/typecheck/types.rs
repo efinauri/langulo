@@ -34,8 +34,8 @@ impl Variant for LanguloVariant {
     fn top() -> Self { LanguloVariant::Any }
 
     fn meet(lhs: Partial<Self>, rhs: Partial<Self>) -> Result<Partial<Self>, Self::Err> {
-        assert_eq!(lhs.least_arity, 0, "spurious child");
-        assert_eq!(rhs.least_arity, 0, "spurious child");
+        debug_assert_eq!(lhs.least_arity, 0, "spurious child");
+        debug_assert_eq!(rhs.least_arity, 0, "spurious child");
 
         use LanguloVariant::*;
         let err = format!("Incompatible types {:?} and {:?}", &lhs.variant, &rhs.variant);
@@ -61,14 +61,14 @@ impl Variant for LanguloVariant {
         Ok(Partial { variant, least_arity: 0 })
     }
 
-    fn arity(&self) -> Arity { Arity::Fixed(0) }
+    fn arity(&self) -> Arity { Arity::Fixed(0) } // ?
 }
 
 impl Constructable for LanguloVariant {
     type Type = LanguloType;
 
     fn construct(&self, children: &[Self::Type]) -> Result<Self::Type, <Self as ContextSensitiveVariant>::Err> {
-        assert!(children.is_empty(), "spurious children");
+        debug_assert!(children.is_empty(), "spurious children");
         use LanguloVariant::*;
         match self {
             Int => Ok(LanguloType::Int),

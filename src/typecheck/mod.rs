@@ -1,9 +1,9 @@
-use fxhash::FxHashMap;
-use crate::parser::ast::lang::{NodeId, LanguloSyntaxNode, LanguloSyntaxNodeExt};
+use crate::errors::err::LanguloErr;
+use crate::parser::ast::lang::{LanguloSyntaxNode, LanguloSyntaxNodeExt, NodeId};
 use crate::parser::ast::node::AstNode;
 use crate::typecheck::types::{LanguloType, LanguloVariant};
+use fxhash::FxHashMap;
 use rusttyc::{TcErr, TcKey, TypeTable, VarlessTypeChecker};
-use crate::errors::err::LanguloErr;
 
 mod types;
 
@@ -14,20 +14,10 @@ pub struct TypeChecker {
 
 macro_rules! assert_children_count {
     ($node:expr, $expected_count:expr) => {{
-        let children: Vec<_> = $node.children().collect();
-        let actual_count = children.len();
-        let node_type = $node.kind();
-        if actual_count != $expected_count {
-            eprintln!(
+        debug_assert_eq!($node.children().count(), $expected_count,
                 "Assertion failed: Node type {:?} expected {} children, but got {}. Node children: {:?}",
-                node_type, $expected_count, actual_count, children
-            );
-            panic!(
-                "Assertion failed: Node type {:?} expected {} children, but got {}.",
-                node_type, $expected_count, actual_count
-            );
-        }
-    }};
+                $node.kind(), $expected_count, $node.children().count(), $node.children().collect::<Vec<_>>());
+    }}
 }
 
 impl TypeChecker {
@@ -63,7 +53,7 @@ impl TypeChecker {
         match node.kind() {
             AstNode::Root => {
                 let mut last_key = match node.first_child() {
-                    None => panic!("cannot typecheck an empty program"),
+                    None => return Ok(key), // program is empty
                     Some(child) => self.tc_node(tc, &child)?
                 };
                 for child in node.children().take(1) {
@@ -84,6 +74,8 @@ impl TypeChecker {
                 tc.impose(key.concretizes(inner))?;
             }
             AstNode::Print => {
+                debug_assert!(node.children().count() >= 1);
+                debug_assert!(node.children().count() <= 2); // optionally it could have a print tag: $<three>3
                 let inner = self.tc_node(tc, &node.first_child().unwrap())?;
                 tc.impose(key.concretizes(inner))?;
             }
@@ -133,8 +125,8 @@ impl TypeChecker {
 #[cfg(test)]
 mod tests {
     use crate::parser::Parser;
-    use crate::typecheck::TypeChecker;
     use crate::typecheck::types::LanguloType;
+    use crate::typecheck::TypeChecker;
 
     fn expect_typecheck(input: &str, expected_type: Option<LanguloType>) {
         let mut parser = Parser::new(input);

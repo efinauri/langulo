@@ -16,8 +16,9 @@ num-derive = "0.4.2"
 num-traits = "0.2.14"
 # type checker
 rusttyc = "0.5.0"
-# garbace collector
+# garbace collector and bitmask for its algo
 gc = { version = "0.5.0", features = ["derive"] }
+bitvec = "1.0.1"
 
 # cli ux
 clap = { version = "4.0", features = ["derive"] }

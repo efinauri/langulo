@@ -52,6 +52,7 @@ pub enum AstNode {
     ContourTypes,
     Option,
     TypeOption,
+    Print,
 }
 
 impl From<AstNode> for SyntaxKind {

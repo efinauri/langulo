@@ -10,6 +10,16 @@ pub struct LanguloErr {
 }
 
 impl LanguloErr {
+    pub(crate) fn vm(p0: &str) -> LanguloErr {
+        Self {
+            diagnostic: Diagnostic::error()
+                .with_message(format!("VMError - {p0}"))
+                .with_labels(vec![]),
+        }
+    }
+}
+
+impl LanguloErr {
     pub fn emit(&self, file: &SimpleFile<&str, &String>) {
         let writer = StandardStream::stderr(ColorChoice::Always);
         let config = codespan_reporting::term::Config::default();

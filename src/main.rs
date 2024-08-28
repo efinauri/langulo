@@ -5,6 +5,9 @@ mod parser;
 mod repl;
 mod errors;
 mod typecheck;
+mod vm;
+mod emitter;
+mod tests;
 
 fn main() {
     let _matches = Command::new("langulo-rs")

@@ -83,7 +83,10 @@ impl TypeChecker {
                 let inner = self.tc_node(tc, &node.first_child().unwrap())?;
                 tc.impose(key.concretizes(inner))?;
             }
-
+            AstNode::Print => {
+                let inner = self.tc_node(tc, &node.first_child().unwrap())?;
+                tc.impose(key.concretizes(inner))?;
+            }
             AstNode::Add => {
                 assert_children_count!(node, 2);
                 tc.impose(key.concretizes_explicit(LanguloVariant::Addable))?;

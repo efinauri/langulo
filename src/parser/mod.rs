@@ -65,7 +65,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn new_postfix_unary_node(&mut self, kind: AstNode, checkpoint: Checkpoint, precedence: u8) -> Result<(), LanguloErr> {
+    fn new_postfix_unary_node(&mut self, kind: AstNode, checkpoint: Checkpoint) -> Result<(), LanguloErr> {
         self.builder.start_node_at(checkpoint, kind.into());
         self.builder.finish_node();
         Ok(())
@@ -109,6 +109,7 @@ impl<'a> Parser<'a> {
             Tok::Str => self.new_leaf_node(AstNode::Str, content)?,
             Tok::Identifier => self.new_leaf_node(AstNode::Identifier, content)?,
             Tok::Not => self.new_prefix_unary_node(AstNode::LogicalNot, &tok)?,
+            Tok::Dollar => self.new_prefix_unary_node(AstNode::Print, &tok)?,
             Tok::Pipe => self.parse_scope(AstNode::Lambda, Tok::Pipe)?,
             Tok::LParen => {
                 self.builder.start_node(AstNode::Grouping.into());
@@ -240,7 +241,7 @@ impl<'a> Parser<'a> {
             Tok::And => self.new_binary_node(AstNode::LogicalAnd, checkpoint, precedence)?,
             Tok::Or => self.new_binary_node(AstNode::LogicalOr, checkpoint, precedence)?,
             Tok::Else => self.new_binary_node(AstNode::Else, checkpoint, precedence)?,
-            Tok::Question => self.new_postfix_unary_node(AstNode::Option, checkpoint, precedence)?,
+            Tok::Question => self.new_postfix_unary_node(AstNode::Option, checkpoint)?,
             Tok::At => { // 3@plus(2);
                 self.builder.start_node_at(checkpoint, AstNode::FunctionAppl.into());
 

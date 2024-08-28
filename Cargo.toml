@@ -3,6 +3,9 @@ name = "langulo"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+debug = []
+
 [dependencies]
 #lexer
 logos = "0.14.1"
@@ -13,6 +16,8 @@ num-derive = "0.4.2"
 num-traits = "0.2.14"
 # type checker
 rusttyc = "0.5.0"
+# garbace collector
+gc = { version = "0.5.0", features = ["derive"] }
 
 # cli ux
 clap = { version = "4.0", features = ["derive"] }

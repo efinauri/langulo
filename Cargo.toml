@@ -7,30 +7,34 @@ edition = "2021"
 debug = []
 
 [dependencies]
+### source code to result pipeline
 #lexer
 logos = "0.14.1"
-#loseless syntax tree
+#loseless syntax tree for parser
 rowan = "0.15.16"
-# needed for rowan
-num-derive = "0.4.2"
-num-traits = "0.2.14"
 # type checker
 rusttyc = "0.5.0"
 # garbace collector and bitmask for its algo
 gc = { version = "0.5.0", features = ["derive"] }
 bitvec = "1.0.1"
 
-# cli ux
+
+### ux
+# cli
 clap = { version = "4.0", features = ["derive"] }
 rustyline = "14.0.0"
 # colored strings
 colored = "2.1.0"
-
 # error messages
 codespan-reporting = "0.11.1"
 log = "0.4.22"
 
+
+### datastructs and utilities
 # fast hashmap
 fxhash = "0.2.1"
+# integer representations of enums (used in ast and mainly tagged values)
+num-derive = "0.4.2"
+num-traits = "0.2.14"
 
 [dev-dependencies]

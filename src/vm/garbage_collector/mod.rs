@@ -1,8 +1,8 @@
 use bitvec::vec::BitVec;
-use crate::vm::tagged_value::TaggedValue;
+use crate::vm::word::word_shape::Word;
 
 pub struct GarbageCollector {
-    tvs: Vec<TaggedValue>,
+    tvs: Vec<Word>,
     marks: BitVec
 }
 
@@ -14,11 +14,14 @@ impl GarbageCollector {
         }
     }
 
-    pub fn trace_if_heap(&mut self, tv: TaggedValue) {
+    // #[cfg(feature = "debug")]
+    pub fn all_marked(&self) -> bool { self.marks.all() }
+
+    pub fn trace_if_heap(&mut self, tv: Word) {
         if tv.in_heap() { self.trace(tv); }
     }
 
-    pub fn trace(&mut self, tv: TaggedValue) {
+    pub fn trace(&mut self, tv: Word) {
         self.tvs.push(tv);
         self.marks.reserve(1);
     }

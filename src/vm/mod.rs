@@ -34,39 +34,45 @@ impl VM {
 
     pub fn pop_value(&mut self) -> Word {
         let back = self.stack.pop_back().expect("stack underflow");
-        debug_assert_eq!(back.opcode(), OpCode::Constant);
+        debug_assert_eq!(back.opcode(), OpCode::Value);
         back
     }
 
     pub fn run(&mut self) -> Result<(), LanguloErr> {
         loop {
             let current = &self.bytecode[self.ip];
+            #[feature(debug)] {
+                println!("running bytecode [{}]: {:?}", self.ip, current);
+            }
             self.ip += 1;
             debug_assert!(self.ip <= self.bytecode.len());
             match current.opcode() {
                 OpCode::Stop => break,
-                // OpCode::Negate => {
-                //     let v = self.pop_value();
-                //     self.stack.push_back(-v);
-                // }
-                OpCode::Constant => self.stack.push_back(*current),
-                OpCode::Add => self
-                    .stack
-                    .back_mut()
-                    .unwrap()
-                    .add_inplace(current, &mut self.gc)?,
+                OpCode::Negate => self.stack.push_back(Word::bool(!current.to_bool(), OpCode::Value)),
+                OpCode::Value => self.stack.push_back(*current),
+                OpCode::Add => self.stack.back_mut().unwrap().add_inplace(current)?,
+                OpCode::Subtract => self.stack.back_mut().unwrap().subtract_inplace(current)?,
+                OpCode::Multiply => self.stack.back_mut().unwrap().multiply_inplace(current)?,
+                OpCode::Divide => self.stack.back_mut().unwrap().divide_inplace(current)?,
+                // OpCode::LogicalEnd => self.stack.back_mut().unwrap().logical_and_inplace(current, &mut self.gc)?,
+                // OpCode::LogicalOr => self.stack.back_mut().unwrap().logical_or_inplace(current, &mut self.gc)?,
+                // OpCode::LogicalXor => self.stack.back_mut().unwrap().logical_xor_inplace(current, &mut self.gc)?,
+                // OpCode::GreaterThan => self.stack.back_mut().unwrap().greater_than_inplace(current)?,
+                // OpCode::LessThan => self.stack.back_mut().unwrap().less_than_inplace(current)?,
+                // OpCode::Equals => self.stack.back_mut().unwrap().equals_inplace(current)?,
+                // OpCode::NotEquals => self.stack.back_mut().unwrap().not_equals_inplace(current)?,
+                // OpCode::GreaterThanEq => self.stack.back_mut().unwrap().greater_than_eq_inplace(current)?,
+                // OpCode::LessThanEq => self.stack.back_mut().unwrap().less_than_eq_inplace(current)?,
 
-                // run_binary!(self, |lhs| current.add(lhs, &mut self.gc) ),
-                // OpCode::Subtract => run_binary!(self, |a, b| a - b),
-                // OpCode::Multiply => run_binary!(self, |a, b| a * b),
                 OpCode::Print => println!("{:?}", self.stack.back().unwrap()),
-                _ => unimplemented!(),
+                _ => unimplemented!("opcode not implemented: {:?}", current.opcode()),
             }
         }
         Ok(())
     }
 
     pub fn finalize(mut self) -> Word {
+        debug_assert_eq!(self.stack.len(), 1);
         self.pop_value()
     }
 }
@@ -75,25 +81,53 @@ impl VM {
 mod tests {
     use super::*;
     use crate::vm::word::word_shape::Word;
-
-    // #[test]
-    // fn negate() {
-    //     let mut vm = VM::new(vec![
-    //         Instruction::new(Constant, 5),
-    //         Instruction::new(Negate, 0),
-    //         Instruction::new(Return, 0)]);
-    //     vm.run().unwrap();
-    //     assert_eq!(vm.stack.pop_back().unwrap(), -5);
-    // }
+    fn expect_float_vm_execution_approx(lhs: f64, rhs: f64, op: OpCode, expected_output: f64) {
+        let mut gc = GarbageCollector::new();
+        let bytecode = vec![
+            Word::float(lhs, &mut gc, OpCode::Value),
+            Word::float(rhs, &mut gc, op),
+            Word::int(0, OpCode::Stop)
+        ];
+        let mut vm = VM::new(bytecode);
+        vm.run().unwrap();
+        let result = vm.finalize();
+        println!("{:?}", result);
+        let result_flt = result.to_float();
+        assert!((result_flt - expected_output).abs() < 0.00001);
+    }
 
     #[test]
-    fn add() {
-        let mut vm = VM::new(vec![
-            Word::int(3, OpCode::Constant),
-            Word::int(5, OpCode::Add),
-            Word::int(0, OpCode::Stop),
-        ]);
+    fn float_arithmetic_tests() {
+        expect_float_vm_execution_approx(3.0, 5.0, OpCode::Add, 8.0);
+        expect_float_vm_execution_approx(3.0, 5.0, OpCode::Subtract, -2.0);
+        expect_float_vm_execution_approx(3.0, 5.0, OpCode::Multiply, 15.0);
+        expect_float_vm_execution_approx(3.0, 5.0, OpCode::Divide, 0.6);
+    }
+
+    fn expect_vm_execution(mut bytecode: Vec<Word>, expected_output: Word) {
+        bytecode.push(Word::int(0, OpCode::Stop));
+        let mut vm = VM::new(bytecode);
         vm.run().unwrap();
-        assert_eq!(vm.stack.pop_back().unwrap().to_int(), 8);
+        assert_eq!(vm.finalize(), expected_output);
+    }
+
+    #[test]
+    fn various_vm_tests() {
+        expect_vm_execution(
+            vec![Word::bool(true, OpCode::Negate)],
+            Word::bool(false, OpCode::Value),
+        );
+        expect_vm_execution(
+            vec![Word::int(3, OpCode::Value), Word::int(5, OpCode::Add)],
+            Word::int(8, OpCode::Value),
+        );
+        expect_vm_execution(
+            vec![Word::int(3, OpCode::Value), Word::int(5, OpCode::Subtract)],
+            Word::int(-2, OpCode::Value),
+        );
+        expect_vm_execution(
+            vec![Word::int(3, OpCode::Value), Word::int(5, OpCode::Multiply)],
+            Word::int(15, OpCode::Value),
+        );
     }
 }

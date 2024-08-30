@@ -4,7 +4,7 @@ pub mod word_shape;
 
 use crate::vm::garbage_collector::GarbageCollector;
 use crate::vm::word::heap::{HeapFloat, HeapStr, HeapTable, HeapValue};
-use crate::vm::word::word_shape::{OpCode, ValueTag, Word, PTR_MASK, PTR_START};
+use crate::vm::word::word_shape::{OpCode, ValueTag, Word};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
@@ -23,44 +23,21 @@ impl Word {
     }
 
     pub fn float(value: f64, gc: &mut GarbageCollector, opcode: OpCode) -> Self {
-        let ptr = unsafe { HeapFloat::write(value) };
+        let ptr = HeapFloat::write(value, opcode);
         gc.trace(ptr);
         ptr
     }
 
-    pub fn str(value: &str, gc: &mut GarbageCollector) -> Self {
-        let ptr = unsafe { HeapStr::write(value.to_string()) };
+    pub fn str(value: &str, gc: &mut GarbageCollector, opcode: OpCode) -> Self {
+        let ptr = unsafe { HeapStr::write(value.to_string(), opcode) };
         gc.trace(ptr);
         ptr
     }
 
-    pub fn table(value: BTreeMap<Word, Word>, gc: &mut GarbageCollector) -> Self {
-        let ptr = unsafe { HeapTable::write(value) };
+    pub fn table(value: BTreeMap<Word, Word>, gc: &mut GarbageCollector, opcode: OpCode) -> Self {
+        let ptr = HeapTable::write(value, opcode);
         gc.trace(ptr);
         ptr
-    }
-}
-
-// accessors
-impl Word {
-    pub fn in_heap(&self) -> bool {
-        self.tag() > ValueTag::Char
-    }
-
-    unsafe fn get<'a, T>(self) -> &'a T {
-        &*(self.ptr() as *const T)
-    }
-
-    unsafe fn get_mut<'a, T>(self) -> &'a mut T {
-        &mut *(self.ptr() as *mut T)
-    }
-
-    fn value(&self) -> u64 {
-        (self.0 as u64 & PTR_MASK) >> PTR_START
-    }
-
-    fn set_value(&mut self, value: u64) {
-        self.0 = ((self.0 as u64 & !PTR_MASK) | (value << PTR_START)) as _
     }
 }
 
@@ -154,89 +131,97 @@ mod tests {
 
     #[test]
     fn int() {
-        let tv = Word::int(2345, OpCode::Constant);
-        println!("{:?}", tv);
-        assert_eq!(tv.tag(), ValueTag::Int);
-        assert_eq!(tv.to_int(), 2345);
-    }
+        let w = Word::int(2345, OpCode::Value);
+        println!("{:?}", w);
+        assert_eq!(w.tag(), ValueTag::Int);
+        assert_eq!(w.to_int(), 2345);
+        let w = Word::int(-21, OpCode::Value);
+        println!("{:?}", w);
+        assert_eq!(w.tag(), ValueTag::Int);
+        assert_eq!(w.to_int(), -21);
+        let w = Word::int(-21, OpCode::Add);
+        println!("{:?}", w);
+        assert_eq!(w.tag(), ValueTag::Int);
+        assert_eq!(w.opcode(), OpCode::Add);
+        assert_eq!(w.to_int(), -21);
 
-    #[test]
-    fn set_value() {
-        let mut tv = Word::int(2345, OpCode::Constant);
-        println!("{:?}", tv);
-        tv.set_value(123);
-        println!("{:?}", tv);
-        assert_eq!(tv.to_int(), 123);
     }
 
     #[test]
     fn bools() {
-        let tv = Word::bool(true, OpCode::Constant);
-        println!("{:?}", tv);
-        assert_eq!(tv.tag(), ValueTag::Bool);
-        assert_eq!(tv.to_bool(), true);
+        let w = Word::bool(true, OpCode::Value);
+        println!("{:?}", w);
+        assert_eq!(w.tag(), ValueTag::Bool);
+        assert_eq!(w.to_bool(), true);
 
-        let tv = Word::bool(false, OpCode::Constant);
-        println!("{:?}", tv);
-        assert_eq!(tv.tag(), ValueTag::Bool);
-        assert_eq!(tv.to_bool(), false);
+        let w = Word::bool(false, OpCode::Value);
+        println!("{:?}", w);
+        assert_eq!(w.tag(), ValueTag::Bool);
+        assert_eq!(w.to_bool(), false);
     }
 
     #[test]
     fn chars() {
         for ch in "Hello, world!".chars() {
-            let tv = Word::char(ch, OpCode::Constant);
-            println!("{:?}", tv);
-            assert_eq!(tv.tag(), ValueTag::Char);
-            assert_eq!(tv.to_char(), ch);
+            let w = Word::char(ch, OpCode::Value);
+            println!("{:?}", w);
+            assert_eq!(w.tag(), ValueTag::Char);
+            assert_eq!(w.to_char(), ch);
         }
     }
 
     #[test]
     fn float() {
         let mut gc = GarbageCollector::new();
-        let tv = Word::float(3.14, &mut gc, OpCode::Constant);
-        println!("{:?}", tv);
-        assert_eq!(tv.to_float(), 3.14);
+        let w = Word::float(3.14, &mut gc, OpCode::Value);
+        println!("{:?}", w);
+        assert_eq!(w.to_float(), 3.14);
+        let w = Word::float(-2.7181, &mut gc, OpCode::Value);
+        println!("{:?}", w);
+        assert_eq!(w.to_float(), -2.7181);
+        let w = Word::float(0.0, &mut gc, OpCode::Add);
+        println!("{:?}", w);
+        assert_eq!(w.opcode(), OpCode::Add);
+        assert_eq!(w.to_float(), 0.0);
     }
 
     #[test]
     fn string() {
         let mut gc = GarbageCollector::new();
-        let tv = Word::str("Hello, world!", &mut gc);
-        println!("{:?}", tv);
-        assert_eq!(tv.as_str(), "Hello, world!");
+        let w = Word::str("Hello, world!", &mut gc, OpCode::Value);
+        println!("{:?}", w);
+        assert_eq!(w.as_str(), "Hello, world!");
 
-        let mut tv_mut = Word::str("Hello", &mut gc);
-        tv_mut.as_str_mut().push_str(", world!");
-        assert_eq!(tv_mut.as_str(), "Hello, world!");
+        let mut w_mut = Word::str("Hello", &mut gc, OpCode::Value);
+        w_mut.as_str_mut().push_str(", world!");
+        assert_eq!(w_mut.as_str(), "Hello, world!");
     }
 
     #[test]
     fn table() {
         let mut gc = GarbageCollector::new();
         let mut table = BTreeMap::new();
-        table.insert(Word::int(1, OpCode::Constant), Word::str("hello", &mut gc));
-        table.insert(Word::int(2, OpCode::Constant), Word::str("world", &mut gc));
+        table.insert(Word::int(1, OpCode::Value), Word::str("hello", &mut gc, OpCode::Value));
+        table.insert(Word::int(2, OpCode::Value), Word::str("world", &mut gc, OpCode::Value));
 
-        let mut tv = Word::table(table, &mut gc);
-        println!("{:?}", tv);
-        assert_eq!(tv.as_table().len(), 2);
+        let mut w = Word::table(table, &mut gc, OpCode::Value);
+        println!("{:?}", w);
+        assert_eq!(w.as_table().len(), 2);
         assert_eq!(
-            tv.as_table()
-                .get(&Word::int(1, OpCode::Constant))
+            w.as_table()
+                .get(&Word::int(1, OpCode::Value))
                 .unwrap()
                 .as_str(),
             "hello"
         );
         assert_eq!(
-            tv.as_table()
-                .get(&Word::int(2, OpCode::Constant))
+            w.as_table()
+                .get(&Word::int(2, OpCode::Value))
                 .unwrap()
                 .as_str(),
             "world"
         );
-        tv.as_table_mut().remove(&Word::int(1, OpCode::Constant));
-        assert_eq!(tv.as_table().len(), 1);
+        w.as_table_mut().remove(&Word::int(1, OpCode::Value));
+        assert_eq!(w.as_table().len(), 1);
     }
 }

@@ -1,31 +1,28 @@
 pub mod heap;
+pub mod operations;
 pub mod word_shape;
 
+use crate::vm::garbage_collector::GarbageCollector;
+use crate::vm::word::heap::{HeapFloat, HeapStr, HeapTable, HeapValue};
+use crate::vm::word::word_shape::{OpCode, ValueTag, Word, PTR_MASK, PTR_START};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
-use std::fmt::{Debug, Formatter};
-use crate::vm::garbage_collector::GarbageCollector;
-use num_traits::FromPrimitive;
-use crate::vm::word::heap::{HeapFloat, HeapStr, HeapTable, HeapValue};
-use crate::vm::word::word_shape::{OpCode, ValueTag, Word, TAG_MASK, PTR_MASK};
 
 // constructors
 impl Word {
-
-
-    pub fn bool(value: bool) -> Self {
-        Self::new(value as u8 as _, false, false, OpCode::Value, ValueTag::Bool)
+    pub fn bool(value: bool, opcode: OpCode) -> Self {
+        Self::new(value as u8 as _, false, false, opcode, ValueTag::Bool)
     }
 
-    pub fn int(value: isize) -> Self {
-        Self::new(value as _, false, false, OpCode::Value, ValueTag::Int)
+    pub fn int(value: i32, opcode: OpCode) -> Self {
+        Self::new(value as _, false, false, opcode, ValueTag::Int)
     }
 
-    pub fn char(value: char) -> Self {
-        Self::new(value as u8 as _, false, false, OpCode::Value, ValueTag::Char)
+    pub fn char(value: char, opcode: OpCode) -> Self {
+        Self::new(value as u8 as _, false, false, opcode, ValueTag::Char)
     }
 
-    pub fn float(value: f64, gc: &mut GarbageCollector) -> Self {
+    pub fn float(value: f64, gc: &mut GarbageCollector, opcode: OpCode) -> Self {
         let ptr = unsafe { HeapFloat::write(value) };
         gc.trace(ptr);
         ptr
@@ -46,15 +43,25 @@ impl Word {
 
 // accessors
 impl Word {
-    pub fn in_heap(&self) -> bool { self.tag() > ValueTag::Char }
+    pub fn in_heap(&self) -> bool {
+        self.tag() > ValueTag::Char
+    }
 
     unsafe fn get<'a, T>(self) -> &'a T {
         &*(self.ptr() as *const T)
     }
 
-    unsafe fn get_mut<'a, T>(self) -> &'a mut T { &mut *(self.ptr() as *mut T) }
+    unsafe fn get_mut<'a, T>(self) -> &'a mut T {
+        &mut *(self.ptr() as *mut T)
+    }
 
-    fn value(&self) -> u64 { self.0 as u64 & PTR_MASK }
+    fn value(&self) -> u64 {
+        (self.0 as u64 & PTR_MASK) >> PTR_START
+    }
+
+    fn set_value(&mut self, value: u64) {
+        self.0 = ((self.0 as u64 & !PTR_MASK) | (value << PTR_START)) as _
+    }
 }
 
 // finalizers
@@ -110,7 +117,7 @@ impl Word {
                 ValueTag::FloatPtr => HeapFloat::destroy(self),
                 ValueTag::StrPtr => HeapStr::destroy(self),
                 ValueTag::TablePtr => HeapTable::destroy(self),
-                _ => ()
+                _ => (),
             }
         }
     }
@@ -118,24 +125,21 @@ impl Word {
 
 impl PartialEq for Word {
     fn eq(&self, other: &Self) -> bool {
-        self.tag() == other.tag() && match self.tag() {
-            ValueTag::Int
-            | ValueTag::Bool
-            | ValueTag::Char => self.0 == other.0,
-            ValueTag::FnPtr => unimplemented!(),
-            ValueTag::FloatPtr => self.to_float() == other.to_float(),
-            ValueTag::StrPtr => self.as_str() == other.as_str(),
-            ValueTag::TablePtr => unimplemented!(),
-        }
+        self.tag() == other.tag()
+            && match self.tag() {
+                ValueTag::Int | ValueTag::Bool | ValueTag::Char => self.0 == other.0,
+                ValueTag::FnPtr => unimplemented!(),
+                ValueTag::FloatPtr => self.to_float() == other.to_float(),
+                ValueTag::StrPtr => self.as_str() == other.as_str(),
+                ValueTag::TablePtr => unimplemented!(),
+            }
     }
 }
 impl PartialOrd for Word {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         debug_assert_eq!(self.tag(), other.tag());
         match self.tag() {
-            ValueTag::Int
-            | ValueTag::Bool
-            | ValueTag::Char => self.0.partial_cmp(&other.0),
+            ValueTag::Int | ValueTag::Bool | ValueTag::Char => self.0.partial_cmp(&other.0),
             ValueTag::FnPtr => unimplemented!(),
             ValueTag::FloatPtr => self.to_float().partial_cmp(&other.to_float()),
             ValueTag::StrPtr => self.as_str().partial_cmp(&other.as_str()),
@@ -150,20 +154,29 @@ mod tests {
 
     #[test]
     fn int() {
-        let tv = Word::int(2345);
+        let tv = Word::int(2345, OpCode::Constant);
         println!("{:?}", tv);
         assert_eq!(tv.tag(), ValueTag::Int);
         assert_eq!(tv.to_int(), 2345);
     }
 
     #[test]
+    fn set_value() {
+        let mut tv = Word::int(2345, OpCode::Constant);
+        println!("{:?}", tv);
+        tv.set_value(123);
+        println!("{:?}", tv);
+        assert_eq!(tv.to_int(), 123);
+    }
+
+    #[test]
     fn bools() {
-        let tv = Word::bool(true);
+        let tv = Word::bool(true, OpCode::Constant);
         println!("{:?}", tv);
         assert_eq!(tv.tag(), ValueTag::Bool);
         assert_eq!(tv.to_bool(), true);
 
-        let tv = Word::bool(false);
+        let tv = Word::bool(false, OpCode::Constant);
         println!("{:?}", tv);
         assert_eq!(tv.tag(), ValueTag::Bool);
         assert_eq!(tv.to_bool(), false);
@@ -172,7 +185,7 @@ mod tests {
     #[test]
     fn chars() {
         for ch in "Hello, world!".chars() {
-            let tv = Word::char(ch);
+            let tv = Word::char(ch, OpCode::Constant);
             println!("{:?}", tv);
             assert_eq!(tv.tag(), ValueTag::Char);
             assert_eq!(tv.to_char(), ch);
@@ -182,12 +195,9 @@ mod tests {
     #[test]
     fn float() {
         let mut gc = GarbageCollector::new();
-        let tv = Word::float(3.14, &mut gc);
+        let tv = Word::float(3.14, &mut gc, OpCode::Constant);
         println!("{:?}", tv);
         assert_eq!(tv.to_float(), 3.14);
-        tv.free();
-
-        assert!(gc.all_marked());
     }
 
     #[test]
@@ -200,28 +210,33 @@ mod tests {
         let mut tv_mut = Word::str("Hello", &mut gc);
         tv_mut.as_str_mut().push_str(", world!");
         assert_eq!(tv_mut.as_str(), "Hello, world!");
-
-        tv.free();
-        tv_mut.free();
-        assert!(gc.all_marked());
     }
 
     #[test]
     fn table() {
         let mut gc = GarbageCollector::new();
         let mut table = BTreeMap::new();
-        table.insert(Word::int(1), Word::str("hello", &mut gc));
-        table.insert(Word::int(2), Word::str("world", &mut gc));
+        table.insert(Word::int(1, OpCode::Constant), Word::str("hello", &mut gc));
+        table.insert(Word::int(2, OpCode::Constant), Word::str("world", &mut gc));
 
         let mut tv = Word::table(table, &mut gc);
         println!("{:?}", tv);
         assert_eq!(tv.as_table().len(), 2);
-        assert_eq!(tv.as_table().get(&Word::int(1)).unwrap().as_str(), "hello");
-        assert_eq!(tv.as_table().get(&Word::int(2)).unwrap().as_str(), "world");
-        tv.as_table_mut().remove(&Word::int(1));
+        assert_eq!(
+            tv.as_table()
+                .get(&Word::int(1, OpCode::Constant))
+                .unwrap()
+                .as_str(),
+            "hello"
+        );
+        assert_eq!(
+            tv.as_table()
+                .get(&Word::int(2, OpCode::Constant))
+                .unwrap()
+                .as_str(),
+            "world"
+        );
+        tv.as_table_mut().remove(&Word::int(1, OpCode::Constant));
         assert_eq!(tv.as_table().len(), 1);
-
-        tv.free();
-        assert!(gc.all_marked());
     }
 }

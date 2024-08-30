@@ -1,13 +1,13 @@
 use clap::Command;
 
+mod emitter;
+mod errors;
 mod lexer;
 mod parser;
 mod repl;
-mod errors;
+mod tests;
 mod typecheck;
 mod vm;
-mod emitter;
-mod tests;
 
 fn main() {
     let _matches = Command::new("langulo-rs")

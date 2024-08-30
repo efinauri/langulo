@@ -14,9 +14,15 @@ logos = "0.14.1"
 rowan = "0.15.16"
 # type checker
 rusttyc = "0.5.0"
-# garbace collector and bitmask for its algo
+
+
+### heap operations
+# garbace collector
 gc = { version = "0.5.0", features = ["derive"] }
+# bitmask for tricolor sweep algo
 bitvec = "1.0.1"
+# mmap for restricting ptrs to 32bit
+libc = "0.2.158"
 
 
 ### ux

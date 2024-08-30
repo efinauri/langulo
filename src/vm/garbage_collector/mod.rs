@@ -1,9 +1,9 @@
-use bitvec::vec::BitVec;
 use crate::vm::word::word_shape::Word;
+use bitvec::vec::BitVec;
 
 pub struct GarbageCollector {
     tvs: Vec<Word>,
-    marks: BitVec
+    marks: BitVec,
 }
 
 impl GarbageCollector {
@@ -15,10 +15,14 @@ impl GarbageCollector {
     }
 
     // #[cfg(feature = "debug")]
-    pub fn all_marked(&self) -> bool { self.marks.all() }
+    pub fn all_marked(&self) -> bool {
+        self.marks.all()
+    }
 
     pub fn trace_if_heap(&mut self, tv: Word) {
-        if tv.in_heap() { self.trace(tv); }
+        if tv.in_heap() {
+            self.trace(tv);
+        }
     }
 
     pub fn trace(&mut self, tv: Word) {
@@ -41,4 +45,3 @@ impl GarbageCollector {
     //
     // }
 }
-

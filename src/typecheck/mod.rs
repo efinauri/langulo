@@ -41,20 +41,25 @@ impl TypeChecker {
         let mut tc = VarlessTypeChecker::new();
         self.tc_node(&mut tc, &root)
             .map_err(|_| LanguloErr::typecheck("todo".to_string()))?;
-        let table = tc.type_check()
+        let table = tc
+            .type_check()
             .map_err(|_| LanguloErr::typecheck("todo".to_string()))?;
         self.key_to_type = table;
         Ok(())
     }
 
-    fn tc_node(&mut self, tc: &mut VarlessTypeChecker<LanguloVariant>, node: &LanguloSyntaxNode) -> Result<TcKey, TcErr<LanguloVariant>> {
+    fn tc_node(
+        &mut self,
+        tc: &mut VarlessTypeChecker<LanguloVariant>,
+        node: &LanguloSyntaxNode,
+    ) -> Result<TcKey, TcErr<LanguloVariant>> {
         let key = tc.new_term_key();
 
         match node.kind() {
             AstNode::Root => {
                 let mut last_key = match node.first_child() {
                     None => return Ok(key), // program is empty
-                    Some(child) => self.tc_node(tc, &child)?
+                    Some(child) => self.tc_node(tc, &child)?,
                 };
                 for child in node.children().take(1) {
                     last_key = self.tc_node(tc, &child)?;
@@ -121,7 +126,6 @@ impl TypeChecker {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use crate::parser::Parser;
@@ -143,11 +147,19 @@ mod tests {
     }
 
     #[test]
-    fn int() { expect_typecheck("1;", Some(LanguloType::Int)) }
+    fn int() {
+        expect_typecheck("1;", Some(LanguloType::Int))
+    }
     #[test]
-    fn arithmetic() { expect_typecheck("1 + 2;", Some(LanguloType::Int)) }
+    fn arithmetic() {
+        expect_typecheck("1 + 2;", Some(LanguloType::Int))
+    }
     #[test]
-    fn arithmetic_fails() { expect_typecheck("1 + 'c';", None) }
+    fn arithmetic_fails() {
+        expect_typecheck("1 + 'c';", None)
+    }
     #[test]
-    fn cannot_sum_chars() { expect_typecheck("'c' + 'd';", None) }
+    fn cannot_sum_chars() {
+        expect_typecheck("'c' + 'd';", None)
+    }
 }

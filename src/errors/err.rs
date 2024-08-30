@@ -30,8 +30,7 @@ impl LanguloErr {
         Self {
             diagnostic: Diagnostic::error()
                 .with_message(format!("LexicalError - {msg}"))
-                .with_labels(vec![Label::primary((),
-                                                 span.start..span.end)]),
+                .with_labels(vec![Label::primary((), span.start..span.end)]),
         }
     }
 
@@ -43,7 +42,7 @@ impl LanguloErr {
         }
     }
 
-    pub fn semantic(msg: &str, /*span: &Span*/) -> Self {
+    pub fn semantic(msg: &str /*span: &Span*/) -> Self {
         Self {
             diagnostic: Diagnostic::error()
                 .with_message(format!("SemanticError - {msg}"))
@@ -55,7 +54,7 @@ impl LanguloErr {
         Self {
             diagnostic: Diagnostic::error()
                 .with_message(format!("TypeError - {msg}"))
-                .with_labels(vec![Label::primary((), 0..0)])
+                .with_labels(vec![Label::primary((), 0..0)]),
         }
     }
 }

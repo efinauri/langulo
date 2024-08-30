@@ -1,6 +1,6 @@
-use logos::Logos;
 use crate::errors::err::LanguloErr;
 use crate::lexer::tok::Tok;
+use logos::Logos;
 
 pub mod tok;
 
@@ -19,13 +19,15 @@ impl<'a> Lexer<'a> {
     }
 
     fn inner_next(&mut self) -> Result<Option<(Tok, &'a str)>, LanguloErr> {
-        let maybe_tok = self.logos.next()
+        let maybe_tok = self
+            .logos
+            .next()
             .transpose()
             .map_err(|_| LanguloErr::lexical("Invalid Token", &self.logos.span()))?;
 
         match maybe_tok {
             None => Ok(None),
-            Some(tok) => Ok(Some((tok, self.logos.slice())))
+            Some(tok) => Ok(Some((tok, self.logos.slice()))),
         }
     }
 
@@ -47,8 +49,8 @@ impl<'a> Lexer<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::lexer::Lexer;
     use crate::lexer::tok::Tok;
+    use crate::lexer::Lexer;
 
     #[test]
     fn walk() {
@@ -65,5 +67,5 @@ mod tests {
         assert!(lex.next().expect("no").is_some()); //5
         assert!(lex.next().expect("no").is_none());
         assert!(lex.peek().expect("no").is_none())
-        }
+    }
 }

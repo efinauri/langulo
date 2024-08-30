@@ -1,5 +1,5 @@
-use rusttyc::{Arity, Constructable, ContextSensitiveVariant, Partial, Variant};
 use crate::errors::err::LanguloErr;
+use rusttyc::{Arity, Constructable, ContextSensitiveVariant, Partial, Variant};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LanguloType {
@@ -27,18 +27,22 @@ pub enum LanguloVariant {
 
 struct Variable(usize);
 
-
 impl Variant for LanguloVariant {
     type Err = LanguloErr;
 
-    fn top() -> Self { LanguloVariant::Any }
+    fn top() -> Self {
+        LanguloVariant::Any
+    }
 
     fn meet(lhs: Partial<Self>, rhs: Partial<Self>) -> Result<Partial<Self>, Self::Err> {
         debug_assert_eq!(lhs.least_arity, 0, "spurious child");
         debug_assert_eq!(rhs.least_arity, 0, "spurious child");
 
         use LanguloVariant::*;
-        let err = format!("Incompatible types {:?} and {:?}", &lhs.variant, &rhs.variant);
+        let err = format!(
+            "Incompatible types {:?} and {:?}",
+            &lhs.variant, &rhs.variant
+        );
         let variant = match (lhs.variant, rhs.variant) {
             (Any, other) | (other, Any) => Ok(other),
 
@@ -56,18 +60,26 @@ impl Variant for LanguloVariant {
             (Multipliable, Float) | (Float, Multipliable) => Ok(Float),
             (Multipliable, Multipliable) => Ok(Multipliable),
 
-            _ => Err(LanguloErr::typecheck(err))
+            _ => Err(LanguloErr::typecheck(err)),
         }?;
-        Ok(Partial { variant, least_arity: 0 })
+        Ok(Partial {
+            variant,
+            least_arity: 0,
+        })
     }
 
-    fn arity(&self) -> Arity { Arity::Fixed(0) } // ?
+    fn arity(&self) -> Arity {
+        Arity::Fixed(0)
+    } // ?
 }
 
 impl Constructable for LanguloVariant {
     type Type = LanguloType;
 
-    fn construct(&self, children: &[Self::Type]) -> Result<Self::Type, <Self as ContextSensitiveVariant>::Err> {
+    fn construct(
+        &self,
+        children: &[Self::Type],
+    ) -> Result<Self::Type, <Self as ContextSensitiveVariant>::Err> {
         debug_assert!(children.is_empty(), "spurious children");
         use LanguloVariant::*;
         match self {
@@ -76,9 +88,9 @@ impl Constructable for LanguloVariant {
             Bool => Ok(LanguloType::Bool),
             Str => Ok(LanguloType::Str),
             Char => Ok(LanguloType::Char),
-            Any
-            | Addable
-            | Multipliable => Err(LanguloErr::typecheck("Could not identify type before construction".to_string())),
+            Any | Addable | Multipliable => Err(LanguloErr::typecheck(
+                "Could not identify type before construction".to_string(),
+            )),
         }
     }
 }

@@ -1,10 +1,10 @@
+use crate::parser::Parser;
 use codespan_reporting::files::SimpleFile;
 use colored::Colorize;
 use rustyline::DefaultEditor;
 use std::io;
 use std::io::Write;
 use std::string::String;
-use crate::parser::Parser;
 
 pub fn serve_repl() {
     let mut stdout = io::stdout();
@@ -26,12 +26,14 @@ pub fn serve_repl() {
         match input.trim() {
             "exit" => break,
             "help" => {
-                println!(r#"
+                println!(
+                    r#"
     {} - terminates the REPL session
     {} - shows this message
 "#,
-                         "exit".underline(),
-                         "help".underline());
+                    "exit".underline(),
+                    "help".underline()
+                );
                 continue;
             }
             _ => {}
@@ -42,7 +44,9 @@ pub fn serve_repl() {
         let sf = SimpleFile::new("repl.rs", &source);
 
         let mut parser = Parser::new(&*input);
-        if let Err(err) = parser.parse() { err.emit(&sf); };
+        if let Err(err) = parser.parse() {
+            err.emit(&sf);
+        };
 
         println!("{:#?}", parser.to_ast())
     }

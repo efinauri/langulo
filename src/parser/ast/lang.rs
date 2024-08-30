@@ -1,6 +1,6 @@
+use crate::parser::ast::node::AstNode;
 use num_traits::{FromPrimitive, ToPrimitive};
 use rowan::{Language, SyntaxKind, SyntaxNode, TextRange};
-use crate::parser::ast::node::AstNode;
 
 #[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub enum Langulo {}
@@ -25,5 +25,7 @@ pub trait LanguloSyntaxNodeExt {
     fn id(&self) -> NodeId;
 }
 impl LanguloSyntaxNodeExt for LanguloSyntaxNode {
-    fn id(&self) -> NodeId { (self.kind(), self.text_range()) }
+    fn id(&self) -> NodeId {
+        (self.kind(), self.text_range())
+    }
 }

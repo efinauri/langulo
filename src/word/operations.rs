@@ -1,8 +1,8 @@
 use crate::errors::err::LanguloErr;
 use crate::vm::garbage_collector::GarbageCollector;
-use crate::vm::word::heap::HeapFloat;
-use crate::vm::word::word_shape::ValueTag::*;
-use crate::vm::word::word_shape::{OpCode, Word};
+use crate::word::heap::HeapFloat;
+use crate::word::structure::ValueTag::*;
+use crate::word::structure::{OpCode, Word};
 
 macro_rules! impl_word_cmp {
     ($name:ident, $op:tt) => {
@@ -178,8 +178,7 @@ impl Word {
 #[cfg(test)]
 mod tests {
     use crate::vm::garbage_collector::GarbageCollector;
-    use crate::vm::word::word_shape::OpCode;
-    use crate::vm::word::Word;
+    use crate::word::structure::{OpCode, Word};
 
     #[test]
     fn test_add_inplace() {

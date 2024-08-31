@@ -1,4 +1,4 @@
-use crate::vm::word::heap::HeapValue;
+use crate::word::heap::HeapValue;
 use num_derive::{FromPrimitive, ToPrimitive};
 use num_traits::{FromPrimitive, ToPrimitive};
 use std::fmt::{Debug, Formatter};
@@ -43,6 +43,11 @@ pub enum ValueTag {
 #[repr(u8)]
 pub enum OpCode {
     Value,
+
+    // given to compile-time, heap-allocated values. the value of a word with this opcode
+    // is an index to the value map read by the compiled file
+    ReadFromMap,
+
     Stop,
     Return,
     Jump,
@@ -222,9 +227,17 @@ impl Word {
         ) as _
     }
 
+    pub fn change_opcode(&mut self, new_opcode: OpCode) {
+        self.0 = (
+            (self.0 as u64 &!OPCODE_MASK) | ((new_opcode as u64) << OPCODE_START)
+        ) as _;
+    }
+
     pub fn become_word(&mut self, new_word: Word) {
         self.0 = new_word.0;
     }
+
+    pub fn from_u64(raw: u64) -> Self { Self(raw as _) }
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ mod repl;
 mod tests;
 mod typecheck;
 mod vm;
+pub mod word;
 
 fn main() {
     let _matches = Command::new("langulo-rs")

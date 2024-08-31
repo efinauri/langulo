@@ -1,10 +1,6 @@
-pub mod heap;
-pub mod operations;
-pub mod word_shape;
-
 use crate::vm::garbage_collector::GarbageCollector;
-use crate::vm::word::heap::{HeapFloat, HeapStr, HeapTable, HeapValue};
-use crate::vm::word::word_shape::{OpCode, ValueTag, Word};
+use crate::word::heap::{HeapFloat, HeapStr, HeapTable, HeapValue};
+use crate::word::structure::{OpCode, ValueTag, Word};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
@@ -27,6 +23,10 @@ impl Word {
         gc.trace(ptr);
         ptr
     }
+    
+    pub fn raw_float(pointer_to_float_map: u32) -> Self {
+        Self::new(pointer_to_float_map as _, false, false, OpCode::ReadFromMap, ValueTag::FloatPtr)
+    }
 
     pub fn str(value: &str, gc: &mut GarbageCollector, opcode: OpCode) -> Self {
         let ptr = unsafe { HeapStr::write(value.to_string(), opcode) };
@@ -34,10 +34,18 @@ impl Word {
         ptr
     }
 
+    pub fn raw_str(pointer_to_str_map: u32) -> Self {
+        Self::new(pointer_to_str_map as _, false, false, OpCode::ReadFromMap, ValueTag::StrPtr)
+    }
+
     pub fn table(value: BTreeMap<Word, Word>, gc: &mut GarbageCollector, opcode: OpCode) -> Self {
         let ptr = HeapTable::write(value, opcode);
         gc.trace(ptr);
         ptr
+    }
+
+    pub fn raw_table(pointer_to_table_map: u32) -> Self {
+        Self::new(pointer_to_table_map as _, false, false, OpCode::ReadFromMap, ValueTag::TablePtr)
     }
 }
 

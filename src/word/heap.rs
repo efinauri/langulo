@@ -1,6 +1,5 @@
-use crate::vm::word::word_shape::OpCode;
-use crate::vm::word::word_shape::ValueTag;
-use crate::vm::word::Word;
+use crate::word::structure::{OpCode, Word};
+use crate::word::structure::ValueTag;
 use libc::{mmap, MAP_32BIT, MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE};
 use std::alloc::{dealloc, handle_alloc_error, Layout};
 use std::collections::BTreeMap;
@@ -117,7 +116,7 @@ impl HeapValue for HeapStr {
         heap_get_inner_mut!(w)
     }
 
-    fn write(value: String, opcode: OpCode) -> Word {
+    fn write(value: Self::Inner, opcode: OpCode) -> Word {
         heap_write!(value, ValueTag::StrPtr, opcode)
     }
     fn destroy(w: Word) {
@@ -125,9 +124,10 @@ impl HeapValue for HeapStr {
     }
 }
 
-pub struct HeapTable(pub BTreeMap<Word, Word>);
+pub type Table = BTreeMap<Word, Word>;
+pub struct HeapTable(pub Table);
 impl HeapValue for HeapTable {
-    type Inner = BTreeMap<Word, Word>;
+    type Inner = Table;
 
     fn read(w: &Word) -> &Self::Inner {
         heap_read!(w)
@@ -137,10 +137,48 @@ impl HeapValue for HeapTable {
         heap_get_inner_mut!(w)
     }
 
-    fn write(value: BTreeMap<Word, Word>, opcode: OpCode) -> Word {
+    fn write(value: Self::Inner, opcode: OpCode) -> Word {
         heap_write!(value, ValueTag::TablePtr, opcode)
     }
     fn destroy(w: Word) {
         heap_destroy!(w);
+    }
+}
+
+pub fn encode_table(table: &Table) -> Vec<u64> {
+    let mut encoded = Vec::new();
+
+    for (key, value) in table {
+        encoded.push(key.0 as u64);
+        encoded.push(value.0 as u64);
+    }
+
+    encoded
+}
+
+pub fn decode_table(encoded: &[u64]) -> Table {
+    let mut table = BTreeMap::new();
+    let mut i = 0;
+
+    while i < encoded.len() {
+        let key = Word::from_u64(encoded[i]);
+        let value = Word::from_u64(encoded[i + 1]);
+        table.insert(key, value);
+        i += 2;
+    }
+    table
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decode_encode() {
+        let mut table = HeapTable(BTreeMap::new());
+        table.0.insert(Word::int(42, OpCode::Value), Word::int(123, OpCode::Value));
+        let encoded = encode_table(&table.0);
+        let decoded = decode_table(&encoded);
+        assert_eq!(table.0, decoded);
     }
 }

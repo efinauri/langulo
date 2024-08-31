@@ -1,10 +1,9 @@
 use crate::errors::err::LanguloErr;
 use crate::vm::garbage_collector::GarbageCollector;
-use crate::vm::word::word_shape::{OpCode, Word};
+use crate::word::structure::{OpCode, Word};
 use std::collections::VecDeque;
 
 pub mod garbage_collector;
-pub mod word;
 
 // macro_rules! run_binary {
 //     ($vm:expr, $op:expr) => {{
@@ -71,6 +70,9 @@ impl VM {
                 OpCode::GreaterThanEq => self.stack.back_mut().unwrap().greater_than_eq_inplace(current)?,
                 OpCode::LessThanEq => self.stack.back_mut().unwrap().less_than_eq_inplace(current)?,
 
+                // OpCode::SetLocal
+                // OpCode::GetLocal
+
                 _ => unimplemented!("opcode not implemented: {:?}", current.opcode()),
             }
         }
@@ -86,7 +88,7 @@ impl VM {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vm::word::word_shape::Word;
+    use crate::word::structure::Word;
     fn expect_float_vm_execution_approx(lhs: f32, rhs: f32, op: OpCode, expected_output: f32) {
         let mut gc = GarbageCollector::new();
         let bytecode = vec![

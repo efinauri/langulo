@@ -1,4 +1,4 @@
-use crate::vm::word::word_shape::Word;
+use crate::word::structure::Word;
 use bitvec::vec::BitVec;
 
 pub struct GarbageCollector {

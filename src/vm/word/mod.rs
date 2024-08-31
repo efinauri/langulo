@@ -22,7 +22,7 @@ impl Word {
         Self::new(value as u8 as _, false, false, opcode, ValueTag::Char)
     }
 
-    pub fn float(value: f64, opcode: OpCode, gc: &mut GarbageCollector) -> Self {
+    pub fn float(value: f32, opcode: OpCode, gc: &mut GarbageCollector) -> Self {
         let ptr = HeapFloat::write(value, opcode);
         gc.trace(ptr);
         ptr
@@ -58,7 +58,7 @@ impl Word {
         self.value() as u8 as char
     }
 
-    pub fn to_float(self) -> f64 {
+    pub fn to_float(self) -> f32 {
         debug_assert!(self.in_heap());
         debug_assert_eq!(self.tag(), ValueTag::FloatPtr);
         unsafe { *HeapFloat::read(&self) }

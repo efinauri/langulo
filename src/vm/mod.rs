@@ -55,6 +55,8 @@ impl VM {
                 OpCode::Subtract => self.stack.back_mut().unwrap().subtract_inplace(current)?,
                 OpCode::Multiply => self.stack.back_mut().unwrap().multiply_inplace(current)?,
                 OpCode::Divide => self.stack.back_mut().unwrap().divide_inplace(current)?,
+                OpCode::Power => self.stack.back_mut().unwrap().exponentiate_inplace(current, &mut self.gc)?,
+                OpCode::Modulo => self.stack.back_mut().unwrap().modulo_inplace(current)?,
 
                 OpCode::Negate => self.stack.push_back(Word::bool(!current.to_bool(), OpCode::Value)),
                 OpCode::LogicalAnd => self.stack.back_mut().unwrap().logical_and_inplace(current)?,
@@ -85,7 +87,7 @@ impl VM {
 mod tests {
     use super::*;
     use crate::vm::word::word_shape::Word;
-    fn expect_float_vm_execution_approx(lhs: f64, rhs: f64, op: OpCode, expected_output: f64) {
+    fn expect_float_vm_execution_approx(lhs: f32, rhs: f32, op: OpCode, expected_output: f32) {
         let mut gc = GarbageCollector::new();
         let bytecode = vec![
             Word::float(lhs, OpCode::Value, &mut gc),
@@ -97,7 +99,8 @@ mod tests {
         let result = vm.finalize();
         println!("{:?}", result);
         let result_flt = result.to_float();
-        assert!((result_flt - expected_output).abs() < 0.00001);
+        assert!((result_flt - expected_output).abs() < 0.00001,
+        "Result: {}, Expected: {}", result_flt, expected_output);
     }
 
     #[test]
@@ -254,4 +257,71 @@ mod tests {
             Word::bool(true, OpCode::Value),
         );
     }
+
+    #[test]
+    fn vm_power() {
+        let mut gc = GarbageCollector::new();
+        expect_vm_execution(
+            vec![
+                Word::int(2, OpCode::Value),
+                Word::int(3, OpCode::Power),
+            ],
+            Word::float(8.0, OpCode::Value, &mut gc),
+        );
+        expect_vm_execution(
+            vec![
+                Word::float(2.0, OpCode::Value, &mut gc),
+                Word::float(3.0, OpCode::Power, &mut gc),
+            ],
+            Word::float(8.0, OpCode::Value, &mut gc),
+        );
+        expect_vm_execution(
+            vec![
+                Word::int(2, OpCode::Value),
+                Word::float(3.0, OpCode::Power, &mut gc),
+            ],
+            Word::float(8.0, OpCode::Value, &mut gc),
+        );
+        expect_float_vm_execution_approx(8.0, 0.33333333, OpCode::Power, 2.0);
+        expect_float_vm_execution_approx(4.0, -2.0, OpCode::Power, 0.0625)
+    }
+
+    #[test]
+    fn vm_modulo() {
+        expect_vm_execution(
+            vec![
+                Word::int(7, OpCode::Value),
+                Word::int(3, OpCode::Modulo),
+            ],
+            Word::int(1, OpCode::Value),
+        );
+        expect_vm_execution(
+            vec![
+                Word::int(10, OpCode::Value),
+                Word::int(3, OpCode::Modulo),
+            ],
+            Word::int(1, OpCode::Value),
+        );
+        expect_vm_execution(
+            vec![
+                Word::int(-7, OpCode::Value),
+                Word::int(3, OpCode::Modulo),
+            ],
+            Word::int(-1, OpCode::Value),
+        );
+        expect_vm_execution(
+            vec![
+                Word::int(-10, OpCode::Value),
+                Word::int(3, OpCode::Modulo),
+            ],
+            Word::int(-1, OpCode::Value),
+        );
+
+        expect_float_vm_execution_approx(7.2, 3.3, OpCode::Modulo, 0.6);
+        expect_float_vm_execution_approx(7.2, -3.3, OpCode::Modulo, 0.6);
+        expect_float_vm_execution_approx(7.2, 55.4, OpCode::Modulo, 7.2);
+        expect_float_vm_execution_approx(7.2, -55.4, OpCode::Modulo, 7.2);
+    }
+
+
 }

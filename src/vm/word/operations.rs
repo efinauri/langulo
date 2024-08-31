@@ -1,4 +1,5 @@
 use crate::errors::err::LanguloErr;
+use crate::vm::garbage_collector::GarbageCollector;
 use crate::vm::word::heap::HeapFloat;
 use crate::vm::word::word_shape::ValueTag::*;
 use crate::vm::word::word_shape::{OpCode, Word};
@@ -73,6 +74,53 @@ impl Word {
         };
         Ok(())
     }
+
+    pub fn exponentiate_inplace(&mut self, rhs: &Word, gc: &mut GarbageCollector) -> Result<(), LanguloErr> {
+        debug_assert!([Int, FloatPtr].contains(&rhs.tag()));
+        match (self.tag(), rhs.tag()) {
+            (Int, Int) => {
+                let float_ptr = Word::float(
+                    (self.to_int() as f32).powf(rhs.to_int() as f32),
+                    OpCode::Value,
+                    gc
+                );
+                self.become_word(float_ptr);
+            },
+            (Int, FloatPtr) => {
+                let float_ptr = Word::float(
+                    (self.to_int() as f32).powf(rhs.to_float()),
+                    OpCode::Value,
+                    gc
+                );
+                self.become_word(float_ptr);
+            }
+            (FloatPtr, Int) => self.update_heap_value::<HeapFloat>(self.to_float().powf(rhs.to_int() as f32), OpCode::Value),
+            (FloatPtr, FloatPtr) => self.update_heap_value::<HeapFloat>(self.to_float().powf(rhs.to_float()), OpCode::Value),
+            _ => return Err(LanguloErr::vm("cannot exponentiate")),
+        };
+        Ok(())
+    }
+
+    pub fn modulo_inplace(&mut self, rhs: &Word) -> Result<(), LanguloErr> {
+        debug_assert!([Int, FloatPtr].contains(&rhs.tag()));
+        debug_assert_eq!(self.tag(), rhs.tag());
+        match self.tag() {
+            Int => {
+                if rhs.to_int() == 0 {
+                    return Err(LanguloErr::vm("modulo by zero"));
+                }
+                self.update_stack_value((self.to_int() % rhs.to_int()) as u32, OpCode::Value);
+            }
+            FloatPtr => {
+                if rhs.to_float() == 0.0 {
+                    return Err(LanguloErr::vm("modulo by zero"));
+                }
+                self.update_heap_value::<HeapFloat>(self.to_float() % rhs.to_float(), OpCode::Value)
+            }
+            _ => return Err(LanguloErr::vm("cannot modulo")),
+        };
+        Ok(())
+    }
 }
 
 ///logical
@@ -104,7 +152,7 @@ impl Word {
     pub fn equals_inplace(&mut self, rhs: &Word) -> Result<(), LanguloErr> {
         debug_assert_eq!(self.tag(), rhs.tag());
         self.replace_with_stack_value(
-            (self == rhs) as u32, //relies on PartialOrd implementation
+            (self == rhs) as u32,
             OpCode::Value,
             Bool,
         );
@@ -114,7 +162,7 @@ impl Word {
     pub fn not_equals_inplace(&mut self, rhs: &Word) -> Result<(), LanguloErr> {
         debug_assert_eq!(self.tag(), rhs.tag());
         self.replace_with_stack_value(
-            (self != rhs) as u32, //relies on PartialOrd implementation
+            (self != rhs) as u32,
             OpCode::Value,
             Bool,
         );

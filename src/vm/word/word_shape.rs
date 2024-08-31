@@ -221,6 +221,10 @@ impl Word {
                 | ((self.0 as u64 & !IS_NONE_OPTION_FLAG_MASK) | ((is_none as u64) << IS_NONE_OPTION_FLAG_START))
         ) as _
     }
+
+    pub fn become_word(&mut self, new_word: Word) {
+        self.0 = new_word.0;
+    }
 }
 
 #[cfg(test)]
@@ -269,5 +273,18 @@ mod tests {
         println!("{:?}", w);
         assert_eq!(w.to_int(), 123);
         assert_eq!(w.opcode(), OpCode::Add);
+    }
+
+    #[test]
+    fn become_word() {
+        let mut w = Word::int(2345, OpCode::Value);
+        let new_word = Word::new(0x123 as _, true, false, OpCode::Value, ValueTag::Int);
+        w.become_word(new_word);
+        println!("{:?}", w);
+        assert_eq!(w.ptr(), 0x123 as _);
+        assert_eq!(w.is_option(), true);
+        assert_eq!(w.is_none(), false);
+        assert_eq!(w.opcode(), OpCode::Value);
+        assert_eq!(w.tag(), ValueTag::Int);
     }
 }

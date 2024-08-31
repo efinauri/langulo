@@ -43,11 +43,7 @@ pub enum ValueTag {
 #[repr(u8)]
 pub enum OpCode {
     Value,
-
-    // given to compile-time, heap-allocated values. the value of a word with this opcode
-    // is an index to the value map read by the compiled file
-    ReadFromMap,
-
+    ReadFromMap, // given to compile-time, heap-allocated values. the value of a word with this opcode is an index to the value map read by the compiled file
     Stop,
     Return,
     Jump,
@@ -62,17 +58,15 @@ pub enum OpCode {
     IndexSet,
     WrapInOption,
     UnwrapOption,
-
-    Add,
+    Print, // other ops
+    Cast,
+    Add, // arithmetic
     Subtract,
     Multiply,
     Divide,
     Modulo,
     Power,
-
-    Print,
-
-    Negate,
+    Negate, // logic
     LogicalAnd,
     LogicalOr,
     LogicalXor,
@@ -82,8 +76,24 @@ pub enum OpCode {
     NotEquals,
     GreaterThanEq,
     LessThanEq,
-
-    Cast,
+    PrintThis, // same as above, but an operand is embedded in the word directly
+    CastThis,
+    AddThis, // arithmetic
+    SubtractThis,
+    MultiplyThis,
+    DivideThis,
+    ModuloThis,
+    PowerThis,
+    NegateThis, // logic
+    LogicalAndThis,
+    LogicalOrThis,
+    LogicalXorThis,
+    GreaterThanThis,
+    LessThanThis,
+    EqualsThis,
+    NotEqualsThis,
+    GreaterThanEqThis,
+    LessThanEqThis,
 }
 
 /// for now bits 11..32 are chaff
@@ -172,6 +182,8 @@ impl Word {
     pub fn in_heap(&self) -> bool {
         self.tag() > ValueTag::Char
     }
+
+    pub fn is_embeddable(&self) -> bool { self.opcode() == OpCode::Value }
 
     pub fn get<'a, T>(self) -> &'a T {
         unsafe { &*(self.ptr() as *const T) }

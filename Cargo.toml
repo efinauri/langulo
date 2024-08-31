@@ -42,5 +42,7 @@ fxhash = "0.2.1"
 # integer representations of enums (used in ast and mainly tagged values)
 num-derive = "0.4.2"
 num-traits = "0.2.14"
+# unholy stitching of names in macros
+paste = "1.0.15"
 
 [dev-dependencies]

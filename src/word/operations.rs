@@ -80,7 +80,7 @@ impl Word {
         match (self.tag(), rhs.tag()) {
             (Int, Int) => {
                 let float_ptr = Word::float(
-                    (self.to_int() as f32).powf(rhs.to_int() as f32),
+                    (self.to_int() as f64).powf(rhs.to_int() as f64),
                     OpCode::Value,
                     gc
                 );
@@ -88,13 +88,13 @@ impl Word {
             },
             (Int, FloatPtr) => {
                 let float_ptr = Word::float(
-                    (self.to_int() as f32).powf(rhs.to_float()),
+                    (self.to_int() as f64).powf(rhs.to_float()),
                     OpCode::Value,
                     gc
                 );
                 self.become_word(float_ptr);
             }
-            (FloatPtr, Int) => self.update_heap_value::<HeapFloat>(self.to_float().powf(rhs.to_int() as f32), OpCode::Value),
+            (FloatPtr, Int) => self.update_heap_value::<HeapFloat>(self.to_float().powf(rhs.to_int() as f64), OpCode::Value),
             (FloatPtr, FloatPtr) => self.update_heap_value::<HeapFloat>(self.to_float().powf(rhs.to_float()), OpCode::Value),
             _ => return Err(LanguloErr::vm("cannot exponentiate")),
         };
@@ -216,7 +216,7 @@ mod tests {
         assert!(w.to_bool());
 
         let mut w = Word::float(5.3, OpCode::Value, &mut gc);
-        let w3 = Word::float(5.3000001, OpCode::Value, &mut gc);
+        let w3 = Word::float(5.30001, OpCode::Value, &mut gc);
         w.equals_inplace(&w3).unwrap();
         assert!(!w.to_bool());
     }

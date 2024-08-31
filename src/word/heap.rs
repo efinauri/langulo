@@ -84,9 +84,9 @@ pub trait HeapValue {
     fn destroy(w: Word);
 }
 
-pub struct HeapFloat(f32);
+pub struct HeapFloat(f64);
 impl HeapValue for HeapFloat {
-    type Inner = f32;
+    type Inner = f64;
 
     fn read(w: &Word) -> &Self::Inner {
         heap_read!(w)

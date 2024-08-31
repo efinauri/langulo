@@ -3,14 +3,29 @@ use crate::vm::word::heap::HeapFloat;
 use crate::vm::word::word_shape::ValueTag::*;
 use crate::vm::word::word_shape::{OpCode, Word};
 
+macro_rules! impl_word_cmp {
+    ($name:ident, $op:tt) => {
+        pub fn $name(&mut self, rhs: &Word,) -> Result<(), LanguloErr> {
+            debug_assert_eq!(self.tag(), rhs.tag());
+            self.replace_with_stack_value(
+                ((self as &Word) $op rhs) as u32,
+                OpCode::Value,
+                Bool,
+            );
+            Ok(())
+        }
+    };
+}
+
+
 /// arithmetic. todo: under under/overflow
 impl Word {
     pub fn add_inplace(&mut self, rhs: &Word) -> Result<(), LanguloErr> {
         debug_assert!([Int, FloatPtr].contains(&rhs.tag()));
         debug_assert_eq!(self.tag(), rhs.tag());
         match self.tag() {
-            Int => self.set_stack_value((self.to_int() + rhs.to_int()) as u32, OpCode::Value),
-            FloatPtr => self.set_heap_value::<HeapFloat>(self.to_float() + rhs.to_float(), OpCode::Value),
+            Int => self.update_stack_value((self.to_int() + rhs.to_int()) as u32, OpCode::Value),
+            FloatPtr => self.update_heap_value::<HeapFloat>(self.to_float() + rhs.to_float(), OpCode::Value),
             _ => return Err(LanguloErr::vm("cannot add")),
         };
         Ok(())
@@ -20,8 +35,8 @@ impl Word {
         debug_assert!([Int, FloatPtr].contains(&rhs.tag()));
         debug_assert_eq!(self.tag(), rhs.tag());
         match self.tag() {
-            Int => self.set_stack_value((self.to_int() - rhs.to_int()) as u32, OpCode::Value),
-            FloatPtr => self.set_heap_value::<HeapFloat>(self.to_float() - rhs.to_float(), OpCode::Value),
+            Int => self.update_stack_value((self.to_int() - rhs.to_int()) as u32, OpCode::Value),
+            FloatPtr => self.update_heap_value::<HeapFloat>(self.to_float() - rhs.to_float(), OpCode::Value),
             _ => return Err(LanguloErr::vm("cannot sub")),
         };
         Ok(())
@@ -31,8 +46,8 @@ impl Word {
         debug_assert!([Int, FloatPtr].contains(&rhs.tag()));
         debug_assert_eq!(self.tag(), rhs.tag());
         match self.tag() {
-            Int => self.set_stack_value((self.to_int() * rhs.to_int()) as u32, OpCode::Value),
-            FloatPtr => self.set_heap_value::<HeapFloat>(self.to_float() * rhs.to_float(), OpCode::Value),
+            Int => self.update_stack_value((self.to_int() * rhs.to_int()) as u32, OpCode::Value),
+            FloatPtr => self.update_heap_value::<HeapFloat>(self.to_float() * rhs.to_float(), OpCode::Value),
             _ => return Err(LanguloErr::vm("cannot mul")),
         };
         Ok(())
@@ -46,13 +61,13 @@ impl Word {
                 if rhs.to_int() == 0 {
                     return Err(LanguloErr::vm("division by zero"));
                 }
-                self.set_stack_value((self.to_int() / rhs.to_int()) as u32, OpCode::Value);
+                self.update_stack_value((self.to_int() / rhs.to_int()) as u32, OpCode::Value);
             }
             FloatPtr => {
                 if rhs.to_float() == 0.0 {
                     return Err(LanguloErr::vm("division by zero"));
                 }
-                self.set_heap_value::<HeapFloat>(self.to_float() / rhs.to_float(), OpCode::Value)
+                self.update_heap_value::<HeapFloat>(self.to_float() / rhs.to_float(), OpCode::Value)
             }
             _ => return Err(LanguloErr::vm("cannot div")),
         };
@@ -62,24 +77,24 @@ impl Word {
 
 ///logical
 impl Word {
-    pub fn and_inplace(&mut self, rhs: &Word) -> Result<(), LanguloErr> {
+    pub fn logical_and_inplace(&mut self, rhs: &Word) -> Result<(), LanguloErr> {
         debug_assert_eq!(self.tag(), Bool);
         debug_assert_eq!(rhs.tag(), Bool);
-        self.set_stack_value((self.to_bool() && rhs.to_bool()) as u32, OpCode::Value);
+        self.update_stack_value((self.to_bool() && rhs.to_bool()) as u32, OpCode::Value);
         Ok(())
     }
 
-    pub fn or_inplace(&mut self, rhs: &Word) -> Result<(), LanguloErr> {
+    pub fn logical_or_inplace(&mut self, rhs: &Word) -> Result<(), LanguloErr> {
         debug_assert_eq!(self.tag(), Bool);
         debug_assert_eq!(rhs.tag(), Bool);
-        self.set_stack_value((self.to_bool() || rhs.to_bool()) as u32, OpCode::Value);
+        self.update_stack_value((self.to_bool() || rhs.to_bool()) as u32, OpCode::Value);
         Ok(())
     }
 
-    pub fn xor_inplace(&mut self, rhs: &Word) -> Result<(), LanguloErr> {
+    pub fn logical_xor_inplace(&mut self, rhs: &Word) -> Result<(), LanguloErr> {
         debug_assert_eq!(self.tag(), Bool);
         debug_assert_eq!(rhs.tag(), Bool);
-        self.set_stack_value((self.to_bool() ^ rhs.to_bool()) as u32, OpCode::Value);
+        self.update_stack_value((self.to_bool() ^ rhs.to_bool()) as u32, OpCode::Value);
         Ok(())
     }
 }
@@ -87,14 +102,34 @@ impl Word {
 ///comparisons
 impl Word {
     pub fn equals_inplace(&mut self, rhs: &Word) -> Result<(), LanguloErr> {
-        self.set_stack_value((self.value() == rhs.value()) as u32, OpCode::Value);
+        debug_assert_eq!(self.tag(), rhs.tag());
+        self.replace_with_stack_value(
+            (self == rhs) as u32, //relies on PartialOrd implementation
+            OpCode::Value,
+            Bool,
+        );
         Ok(())
     }
-}
 
+    pub fn not_equals_inplace(&mut self, rhs: &Word) -> Result<(), LanguloErr> {
+        debug_assert_eq!(self.tag(), rhs.tag());
+        self.replace_with_stack_value(
+            (self != rhs) as u32, //relies on PartialOrd implementation
+            OpCode::Value,
+            Bool,
+        );
+        Ok(())
+    }
+
+    impl_word_cmp!(greater_than_inplace, >);
+    impl_word_cmp!(greater_than_eq_inplace, >=);
+    impl_word_cmp!(less_than_inplace, <);
+    impl_word_cmp!(less_than_eq_inplace, <=);
+}
 
 #[cfg(test)]
 mod tests {
+    use crate::vm::garbage_collector::GarbageCollector;
     use crate::vm::word::word_shape::OpCode;
     use crate::vm::word::Word;
 
@@ -112,5 +147,30 @@ mod tests {
         assert_eq!(w.to_int(), -10);
     }
 
+    #[test]
+    fn stack_eq_ne() {
+        let mut w = Word::int(5, OpCode::Value);
+        let w2 = Word::int(5, OpCode::Value);
+        w.equals_inplace(&w2).unwrap();
+        assert!(w.to_bool());
 
+        let mut w = Word::int(5, OpCode::Value);
+        let w3 = Word::int(6, OpCode::Value);
+        w.equals_inplace(&w3).unwrap();
+        assert!(!w.to_bool());
+    }
+
+    #[test]
+    fn heap_eq_ne() {
+        let mut gc = GarbageCollector::new();
+        let mut w = Word::float(5.3, OpCode::Value, &mut gc);
+        let w2 = Word::float(5.3, OpCode::Value, &mut gc);
+        w.equals_inplace(&w2).unwrap();
+        assert!(w.to_bool());
+
+        let mut w = Word::float(5.3, OpCode::Value, &mut gc);
+        let w3 = Word::float(5.3000001, OpCode::Value, &mut gc);
+        w.equals_inplace(&w3).unwrap();
+        assert!(!w.to_bool());
+    }
 }

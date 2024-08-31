@@ -22,7 +22,7 @@ impl Word {
         Self::new(value as u8 as _, false, false, opcode, ValueTag::Char)
     }
 
-    pub fn float(value: f64, gc: &mut GarbageCollector, opcode: OpCode) -> Self {
+    pub fn float(value: f64, opcode: OpCode, gc: &mut GarbageCollector) -> Self {
         let ptr = HeapFloat::write(value, opcode);
         gc.trace(ptr);
         ptr
@@ -104,11 +104,10 @@ impl PartialEq for Word {
     fn eq(&self, other: &Self) -> bool {
         self.tag() == other.tag()
             && match self.tag() {
-                ValueTag::Int | ValueTag::Bool | ValueTag::Char => self.0 == other.0,
-                ValueTag::FnPtr => unimplemented!(),
+                ValueTag::Int | ValueTag::Bool | ValueTag::Char => self.value() == other.value(),
                 ValueTag::FloatPtr => self.to_float() == other.to_float(),
                 ValueTag::StrPtr => self.as_str() == other.as_str(),
-                ValueTag::TablePtr => unimplemented!(),
+                _ => unimplemented!("no partialeq impl for tag {:?}", self.tag()),
             }
     }
 }
@@ -116,11 +115,10 @@ impl PartialOrd for Word {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         debug_assert_eq!(self.tag(), other.tag());
         match self.tag() {
-            ValueTag::Int | ValueTag::Bool | ValueTag::Char => self.0.partial_cmp(&other.0),
-            ValueTag::FnPtr => unimplemented!(),
+            ValueTag::Int | ValueTag::Bool | ValueTag::Char => self.value().partial_cmp(&other.value()),
             ValueTag::FloatPtr => self.to_float().partial_cmp(&other.to_float()),
             ValueTag::StrPtr => self.as_str().partial_cmp(&other.as_str()),
-            ValueTag::TablePtr => unimplemented!(),
+            _ => unimplemented!("no partialord impl for tag {:?}", self.tag()),
         }
     }
 }
@@ -173,13 +171,13 @@ mod tests {
     #[test]
     fn float() {
         let mut gc = GarbageCollector::new();
-        let w = Word::float(3.14, &mut gc, OpCode::Value);
+        let w = Word::float(3.14, OpCode::Value, &mut gc);
         println!("{:?}", w);
         assert_eq!(w.to_float(), 3.14);
-        let w = Word::float(-2.7181, &mut gc, OpCode::Value);
+        let w = Word::float(-2.7181, OpCode::Value, &mut gc);
         println!("{:?}", w);
         assert_eq!(w.to_float(), -2.7181);
-        let w = Word::float(0.0, &mut gc, OpCode::Add);
+        let w = Word::float(0.0, OpCode::Add, &mut gc);
         println!("{:?}", w);
         assert_eq!(w.opcode(), OpCode::Add);
         assert_eq!(w.to_float(), 0.0);

@@ -68,7 +68,7 @@ pub enum OpCode {
     Print,
 
     Negate,
-    LogicalEnd,
+    LogicalAnd,
     LogicalOr,
     LogicalXor,
     GreaterThan,
@@ -180,7 +180,7 @@ impl Word {
         ((self.0 as u64 & PTR_MASK) >> PTR_START) as u32
     }
 
-    pub fn set_stack_value(&mut self, value: u32, opcode: OpCode) {
+    pub fn update_stack_value(&mut self, value: u32, opcode: OpCode) {
         debug_assert!([ValueTag::Int, ValueTag::Bool, ValueTag::Char].contains(&self.tag()));
         self.0 = (
             ((self.0 as u64 & !PTR_MASK) & !OPCODE_MASK)
@@ -190,16 +190,28 @@ impl Word {
         debug_assert_eq!(self.value(), value);
     }
 
-    pub fn set_heap_value<H>(&mut self, value: H::Inner, opcode: OpCode)
+    pub fn replace_with_stack_value(&mut self, value: u32, opcode: OpCode, tag: ValueTag) {
+        // todo make sure that the replaced value was a heap ptr, the corresponding value is swept
+        self.0 = (
+            (((self.0 as u64 & !PTR_MASK) & !OPCODE_MASK) & !TAG_MASK)
+                | ((value as u64) << PTR_START)
+                | (((opcode as u64) << OPCODE_START) & OPCODE_MASK)
+                | (((tag as u64) << TAG_START) & TAG_MASK)
+        ) as _;
+        debug_assert_eq!(self.value(), value);
+        debug_assert_eq!(self.tag(), tag);
+    }
+
+    pub fn update_heap_value<H>(&mut self, value: H::Inner, opcode: OpCode)
     where
         H: HeapValue,
     {
         let mut current = H::get_inner_mut(self);
         *current = value;
         self.0 = (
-            (self.0 as u64 &!OPCODE_MASK)
-            | (((opcode as u64) << OPCODE_START) & OPCODE_MASK)
-            ) as _;
+            (self.0 as u64 & !OPCODE_MASK)
+                | (((opcode as u64) << OPCODE_START) & OPCODE_MASK)
+        ) as _;
     }
 
     pub fn change_tag(&mut self, new_tag: ValueTag, is_option: bool, is_none: bool) {
@@ -253,7 +265,7 @@ mod tests {
     fn set() {
         let mut w = Word::int(2345, OpCode::Value);
         println!("{:?}", w);
-        w.set_stack_value(123, OpCode::Add);
+        w.update_stack_value(123, OpCode::Add);
         println!("{:?}", w);
         assert_eq!(w.to_int(), 123);
         assert_eq!(w.opcode(), OpCode::Add);

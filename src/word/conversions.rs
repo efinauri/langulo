@@ -28,7 +28,7 @@ impl Word {
         Self::new(pointer_to_float_map as _, false, false, OpCode::ReadFromMap, ValueTag::FloatPtr)
     }
 
-    pub fn str(value: &str, gc: &mut GarbageCollector, opcode: OpCode) -> Self {
+    pub fn str(value: &str, opcode: OpCode, gc: &mut GarbageCollector) -> Self {
         let ptr = unsafe { HeapStr::write(value.to_string(), opcode) };
         gc.trace(ptr);
         ptr
@@ -38,7 +38,7 @@ impl Word {
         Self::new(pointer_to_str_map as _, false, false, OpCode::ReadFromMap, ValueTag::StrPtr)
     }
 
-    pub fn table(value: BTreeMap<Word, Word>, gc: &mut GarbageCollector, opcode: OpCode) -> Self {
+    pub fn table(value: BTreeMap<Word, Word>, opcode: OpCode, gc: &mut GarbageCollector) -> Self {
         let ptr = HeapTable::write(value, opcode);
         gc.trace(ptr);
         ptr
@@ -67,31 +67,31 @@ impl Word {
     }
 
     pub fn to_float(self) -> f64 {
-        debug_assert!(self.in_heap());
+        debug_assert!(self.is_tag_for_heap());
         debug_assert_eq!(self.tag(), ValueTag::FloatPtr);
         unsafe { *HeapFloat::read(&self) }
     }
 
     pub fn as_str(&self) -> &str {
-        debug_assert!(self.in_heap());
+        debug_assert!(self.is_tag_for_heap());
         debug_assert_eq!(self.tag(), ValueTag::StrPtr);
         unsafe { HeapStr::read(&self) }
     }
 
     pub fn as_str_mut(&mut self) -> &mut String {
-        debug_assert!(self.in_heap());
+        debug_assert!(self.is_tag_for_heap());
         debug_assert_eq!(self.tag(), ValueTag::StrPtr);
         unsafe { &mut self.get_mut::<HeapStr>().0 }
     }
 
     pub fn as_table(&self) -> &BTreeMap<Word, Word> {
-        debug_assert!(self.in_heap());
+        debug_assert!(self.is_tag_for_heap());
         assert_eq!(self.tag(), ValueTag::TablePtr);
         unsafe { HeapTable::read(&self) }
     }
 
     pub fn as_table_mut(&mut self) -> &mut BTreeMap<Word, Word> {
-        debug_assert!(self.in_heap());
+        debug_assert!(self.is_tag_for_heap());
         assert_eq!(self.tag(), ValueTag::TablePtr);
         unsafe { &mut self.get_mut::<HeapTable>().0 }
     }
@@ -194,11 +194,11 @@ mod tests {
     #[test]
     fn string() {
         let mut gc = GarbageCollector::new();
-        let w = Word::str("Hello, world!", &mut gc, OpCode::Value);
+        let w = Word::str("Hello, world!", OpCode::Value, &mut gc);
         println!("{:?}", w);
         assert_eq!(w.as_str(), "Hello, world!");
 
-        let mut w_mut = Word::str("Hello", &mut gc, OpCode::Value);
+        let mut w_mut = Word::str("Hello", OpCode::Value, &mut gc);
         w_mut.as_str_mut().push_str(", world!");
         assert_eq!(w_mut.as_str(), "Hello, world!");
     }
@@ -207,10 +207,10 @@ mod tests {
     fn table() {
         let mut gc = GarbageCollector::new();
         let mut table = BTreeMap::new();
-        table.insert(Word::int(1, OpCode::Value), Word::str("hello", &mut gc, OpCode::Value));
-        table.insert(Word::int(2, OpCode::Value), Word::str("world", &mut gc, OpCode::Value));
+        table.insert(Word::int(1, OpCode::Value), Word::str("hello", OpCode::Value, &mut gc));
+        table.insert(Word::int(2, OpCode::Value), Word::str("world", OpCode::Value, &mut gc));
 
-        let mut w = Word::table(table, &mut gc, OpCode::Value);
+        let mut w = Word::table(table, OpCode::Value, &mut gc);
         println!("{:?}", w);
         assert_eq!(w.as_table().len(), 2);
         assert_eq!(

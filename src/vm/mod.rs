@@ -1,11 +1,13 @@
 use crate::errors::err::LanguloErr;
 use crate::vm::garbage_collector::GarbageCollector;
-use crate::word::structure::{OpCode, Word};
+use crate::word::structure::{OpCode, ValueTag, Word};
 use std::collections::VecDeque;
 use std::io;
 use std::io::Read;
+use crate::word::heap::decode_table;
 
 pub mod garbage_collector;
+mod input;
 
 macro_rules! branch_binary {
     ($opcode:ident, $method:ident) => {
@@ -29,89 +31,38 @@ pub struct VM {
     stack: VecDeque<Word>,
     gc: GarbageCollector,
     ip: usize,
+    heap_floats: Vec<f64>,
+    // wrapped in a option so that the value can be taken without copying
+    heap_strings: Vec<Option<String>>,
+    heap_tables: Vec<Option<Vec<u8>>>,
 }
 
 impl VM {
-    pub fn new(bytecode: Vec<Word>) -> Self {
+    pub fn new(bytecode: Vec<Word>, heap_floats: Vec<f64>, heap_strings: Vec<Option<String>>, heap_tables: Vec<Option<Vec<u8>>>) -> Self {
         VM {
             bytecode,
             stack: VecDeque::new(),
             gc: GarbageCollector::new(),
             ip: 0,
+            heap_floats,
+            heap_strings,
+            heap_tables,
         }
     }
 
-    pub fn from_compiled_stream<R: Read>(mut reader: R) -> io::Result<Self> {
-        let mut bytecode = Vec::new();
-        let mut heap_floats = Vec::new();
-        let mut heap_tables = Vec::new();
-        let mut heap_strings = Vec::new();
-        loop {
-            let mut section_id = [0u8; 1];
-            if reader.read_exact(&mut section_id).is_err() {
-                break;
-            }
-
-            match section_id[0] {
-                0x01 => {
-                    let mut word_buf = [0u8; 8];
-                    while reader.read_exact(&mut word_buf).is_ok() {
-                        let word = u64::from_le_bytes(word_buf);
-                        bytecode.push(Word::from_u64(word));
-                    }
-                }
-                0x02 => {
-                    let mut float_buf = [0u8; 8];
-                    while reader.read_exact(&mut float_buf).is_ok() {
-                        let float = f64::from_le_bytes(float_buf);
-                        heap_floats.push(float);
-                    }
-                }
-                0x03 => {
-                    let mut num_tables_buf = [0u8; 4];
-                    reader.read_exact(&mut num_tables_buf)?;
-                    let num_tables = u32::from_le_bytes(num_tables_buf);
-
-                    for _ in 0..num_tables {
-                        let mut table_len_buf = [0u8; 4];
-                        reader.read_exact(&mut table_len_buf)?;
-                        let table_len = u32::from_le_bytes(table_len_buf) as usize;
-
-                        let mut table = vec![0u8; table_len];
-                        reader.read_exact(&mut table)?;
-                        heap_tables.push(table);
-                    }
-                }
-                0x04 => {
-                    let mut num_strings_buf = [0u8; 4];
-                    reader.read_exact(&mut num_strings_buf)?;
-                    let num_strings = u32::from_le_bytes(num_strings_buf);
-
-                    for _ in 0..num_strings {
-                        let mut str_len_buf = [0u8; 4];
-                        reader.read_exact(&mut str_len_buf)?;
-                        let str_len = u32::from_le_bytes(str_len_buf) as usize;
-
-                        let mut str_buf = vec![0u8; str_len];
-                        reader.read_exact(&mut str_buf)?;
-
-                        let string = String::from_utf8(str_buf).expect("Invalid UTF-8 data");
-                        heap_strings.push(string);
-                    }
-                }
-                _ => panic!("malformed compiled stream")
-            }
-        }
-        println!("heap floats: {:?}", heap_floats);
-        println!("heap tables: {:?}", heap_tables);
-        println!("heap strings: {:?}", heap_strings);
-        Ok(Self {
+    pub fn from_bytecode_only(bytecode: Vec<Word>) -> Self {
+        VM {
             bytecode,
             stack: VecDeque::new(),
             gc: GarbageCollector::new(),
             ip: 0,
-        })
+            heap_floats: Vec::new(),
+            heap_strings: Vec::new(),
+            heap_tables: Vec::new(),
+        }
     }
+
+
 
     pub fn pop_value(&mut self) -> Word {
         let back = self.stack.pop_back().expect("stack underflow");
@@ -168,9 +119,38 @@ impl VM {
                     debug_assert!(self.stack.len() >= 1);
                     let lhs = self.pop_value();
                     self.stack.back_mut().unwrap().exponentiate_inplace(&lhs, &mut self.gc)?;
-                },
+                }
                 OpCode::PowerThis => self.stack.back_mut().unwrap().exponentiate_inplace(current, &mut self.gc)?,
                 OpCode::NegateThis => self.stack.push_back(Word::bool(!current.to_bool(), OpCode::Value)),
+
+                OpCode::ReadFromMap => {
+                    let map_idx = current.value() as usize;
+                    debug_assert!(current.is_tag_for_heap());
+                    match current.tag() {
+                        ValueTag::FloatPtr => {
+                            let float = *self.heap_floats.get(map_idx)
+                                .expect("readfrommap pointing to invalid raw float");
+                            let word = Word::float(float, OpCode::Value, &mut self.gc);
+                            self.stack.push_back(word);
+                        }
+                        ValueTag::StrPtr => {
+                            let mut string = self.heap_strings.get_mut(map_idx)
+                                .expect("readfrommap pointing to invalid raw string");
+                            let string = string.take().expect("string already taken");
+                            let word = Word::str(&*string, OpCode::Value, &mut self.gc);
+                            self.stack.push_back(word);
+                        }
+                        ValueTag::TablePtr => {
+                            let mut table = self.heap_tables.get_mut(map_idx)
+                                .expect("readfrommap pointing to invalid raw table");
+                            let table = table.take().expect("table already taken");
+                            let table = decode_table(table);
+                            let word = Word::table(table, OpCode::Value, &mut self.gc);
+                            self.stack.push_back(word);
+                        }
+                        _ => return Err(LanguloErr::vm("reading from map a nonheap value")),
+                    }
+                }
                 // OpCode::SetLocal
                 // OpCode::GetLocal
 
@@ -198,29 +178,13 @@ mod tests {
             Word::float(rhs, op, &mut gc),
             Word::int(0, OpCode::Stop)
         ];
-        let mut vm = VM::new(bytecode);
+        let mut vm = VM::from_bytecode_only(bytecode);
         vm.run().unwrap();
         let result = vm.finalize();
         println!("{:?}", result);
         let result_flt = result.to_float();
         assert!((result_flt - expected_output).abs() < 0.00001,
                 "Result: {}, Expected: {}", result_flt, expected_output);
-
-    }
-
-    #[test]
-    fn from_emitted_stream() {
-        let mut emitter = Emitter::new(r#"
-        2 + 3 * 4;
-        "#).expect("could not emit");
-        emitter.emit().unwrap();
-        let mut buf = vec![];
-        emitter.write_to_stream(&mut buf).expect("could not write to stream");
-        let mut cursor = std::io::Cursor::new(buf);
-        let mut vm = VM::from_compiled_stream(&mut cursor).expect("failed to spin vm up from stream");
-        vm.run().expect("error while running");
-        let result = vm.finalize();
-        assert_eq!(result, Word::int(14, OpCode::Value));
     }
 
     #[test]
@@ -233,7 +197,7 @@ mod tests {
 
     fn expect_vm_execution(mut bytecode: Vec<Word>, expected_output: Word) {
         bytecode.push(Word::int(0, OpCode::Stop));
-        let mut vm = VM::new(bytecode);
+        let mut vm = VM::from_bytecode_only(bytecode);
         vm.run().unwrap();
         assert_eq!(vm.finalize(), expected_output);
     }

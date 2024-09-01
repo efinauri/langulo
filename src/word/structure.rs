@@ -179,7 +179,7 @@ impl Word {
         )
     }
 
-    pub fn in_heap(&self) -> bool {
+    pub fn is_tag_for_heap(&self) -> bool {
         self.tag() > ValueTag::Char
     }
 

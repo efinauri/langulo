@@ -57,7 +57,7 @@ pub struct Emitter {
     /// however, this would tightly couple the compilation and execution phases, which is undesirable.
     /// instead, the emitter will serialize these values in a file along with the bytecode, and allow
     /// the VM to load them to its runtime.
-    heap_floats: Vec<f32>,
+    heap_floats: Vec<f64>,
     heap_strings: Vec<String>,
     heap_tables: Vec<Vec<u64>>, // tables are serialized (just a sequence of key/value words)
 }
@@ -95,7 +95,7 @@ impl Emitter {
         match node.kind() {
             AstNode::Int => Ok(Word::int(cast_node!(node, i32)?, OpCode::Value)),
             AstNode::Float => {
-                self.heap_floats.push(cast_node!(node, f32)?);
+                self.heap_floats.push(cast_node!(node, f64)?);
                 Ok(Word::raw_float((self.heap_floats.len() - 1) as u32))
             }
             AstNode::Str => {
@@ -126,26 +126,38 @@ impl Emitter {
     pub fn to_bytecode(self) -> Vec<Word> { self.bytecode }
 
     pub fn write_to_stream<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        #[cfg(test)] {
+            println!("will write the following heap values:");
+            println!("floats: {:?}", self.heap_floats);
+            println!("tables: {:?}", self.heap_tables);
+            println!("strings: {:?}", self.heap_strings);
+        }
+        // writing the len of everything so that the parsing can be exact
         writer.write_all(&[0x01])?;
+        let bytecode_len = self.bytecode.len() as u32;
+        writer.write_all(&bytecode_len.to_le_bytes())?;
         for word in &self.bytecode {
             writer.write_all(&(word.0 as u64).to_le_bytes())?;
         }
+
         writer.write_all(&[0x02])?;
+        let floats_len = self.heap_floats.len() as u32;
+        writer.write_all(&floats_len.to_le_bytes())?;
         for float in &self.heap_floats {
             writer.write_all(&float.to_le_bytes())?;
         }
         writer.write_all(&[0x03])?;
-        // note the number of tables...
-        writer.write_all(&(self.heap_tables.len() as u32).to_le_bytes())?;
+        let num_tables = self.heap_tables.len() as u32;
+        writer.write_all(&num_tables.to_le_bytes())?;
         for table in &self.heap_tables {
-            // ...and the size for each
             writer.write_all(&(table.len() as u32).to_le_bytes())?;
             for &entry in table {
                 writer.write_all(&entry.to_le_bytes())?;
             }
         }
         writer.write_all(&[0x04])?;
-        writer.write_all(&(self.heap_strings.len() as u32).to_le_bytes())?;
+        let num_strings = self.heap_strings.len() as u32;
+        writer.write_all(&num_strings.to_le_bytes())?;
         for string in &self.heap_strings {
             let bytes = string.as_bytes();
             writer.write_all(&(bytes.len() as u32).to_le_bytes())?;
@@ -158,32 +170,6 @@ impl Emitter {
     pub fn write_to_file(&self, path: &Path) -> io::Result<()> {
         let file = File::create(path)?;
         self.write_to_stream(file)
-    }
-
-    pub fn read_from_stream<R: Read>(mut reader: R) -> io::Result<()> {
-        let mut u64_buf = [0u8; 8];
-        reader.read_exact(&mut u64_buf)?;
-        let value_u64 = u64::from_le_bytes(u64_buf);
-        println!("Read u64: {}", value_u64);
-
-        // Read f64 (8 bytes)
-        let mut f64_buf = [0u8; 8];
-        reader.read_exact(&mut f64_buf)?;
-        let value_f64 = f64::from_le_bytes(f64_buf);
-        println!("Read f64: {}", value_f64);
-
-        // Read length of the string (u64, 8 bytes)
-        let mut str_len_buf = [0u8; 8];
-        reader.read_exact(&mut str_len_buf)?;
-        let str_len = u64::from_le_bytes(str_len_buf) as usize;
-
-        // Read the actual string bytes
-        let mut str_buf = vec![0u8; str_len];
-        reader.read_exact(&mut str_buf)?;
-        let value_str = String::from_utf8(str_buf).expect("Invalid UTF-8");
-        println!("Read string: {}", value_str);
-
-        Ok(())
     }
 }
 

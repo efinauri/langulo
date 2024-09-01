@@ -20,7 +20,7 @@ impl GarbageCollector {
     }
 
     pub fn trace_if_heap(&mut self, tv: Word) {
-        if tv.in_heap() {
+        if tv.is_tag_for_heap() {
             self.trace(tv);
         }
     }

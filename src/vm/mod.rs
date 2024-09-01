@@ -35,6 +35,7 @@ pub struct VM {
     // wrapped in a option so that the value can be taken without copying
     heap_strings: Vec<Option<String>>,
     heap_tables: Vec<Option<Vec<u8>>>,
+    heap_options: Vec<Option<u64>>,
 }
 
 impl VM {
@@ -135,6 +136,15 @@ impl VM {
                             let table = table.take().expect("table already taken");
                             let table = decode_table(table);
                             let word = Word::table(table, OpCode::Value, &mut self.gc);
+                            self.stack.push_back(word);
+                        }
+                        ValueTag::OptionPtr => {
+                            let mut option = self.heap_options.get_mut(map_idx)
+                                .expect("readfrommap pointing to invalid raw option");
+                            let option = option.take().expect("option already taken");
+                            let word = Word::option(
+                                if option > 0 { Some(Word::from_u64(option)) } else { None },
+                                OpCode::Value, &mut self.gc);
                             self.stack.push_back(word);
                         }
                         _ => return Err(LanguloErr::vm("reading from map a nonheap value")),

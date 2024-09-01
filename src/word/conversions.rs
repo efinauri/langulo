@@ -1,5 +1,5 @@
 use crate::vm::garbage_collector::GarbageCollector;
-use crate::word::heap::{HeapFloat, HeapStr, HeapTable, HeapValue};
+use crate::word::heap::{HeapFloat, HeapOption, HeapStr, HeapTable, HeapValue};
 use crate::word::structure::{OpCode, ValueTag, Word};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -8,15 +8,15 @@ use std::fmt::Display;
 // constructors
 impl Word {
     pub fn bool(value: bool, opcode: OpCode) -> Self {
-        Self::new(value as u8 as _, false, false, opcode, ValueTag::Bool)
+        Self::new(value as u8 as _, opcode, ValueTag::Bool)
     }
 
     pub fn int(value: i32, opcode: OpCode) -> Self {
-        Self::new(value as _, false, false, opcode, ValueTag::Int)
+        Self::new(value as _, opcode, ValueTag::Int)
     }
 
     pub fn char(value: char, opcode: OpCode) -> Self {
-        Self::new(value as u8 as _, false, false, opcode, ValueTag::Char)
+        Self::new(value as u8 as _, opcode, ValueTag::Char)
     }
 
     pub fn float(value: f64, opcode: OpCode, gc: &mut GarbageCollector) -> Self {
@@ -26,7 +26,7 @@ impl Word {
     }
 
     pub fn raw_float(pointer_to_float_map: u32) -> Self {
-        Self::new(pointer_to_float_map as _, false, false, OpCode::ReadFromMap, ValueTag::FloatPtr)
+        Self::new(pointer_to_float_map as _, OpCode::ReadFromMap, ValueTag::FloatPtr)
     }
 
     pub fn str(value: &str, opcode: OpCode, gc: &mut GarbageCollector) -> Self {
@@ -36,7 +36,7 @@ impl Word {
     }
 
     pub fn raw_str(pointer_to_str_map: u32) -> Self {
-        Self::new(pointer_to_str_map as _, false, false, OpCode::ReadFromMap, ValueTag::StrPtr)
+        Self::new(pointer_to_str_map as _, OpCode::ReadFromMap, ValueTag::StrPtr)
     }
 
     pub fn table(value: BTreeMap<Word, Word>, opcode: OpCode, gc: &mut GarbageCollector) -> Self {
@@ -46,7 +46,17 @@ impl Word {
     }
 
     pub fn raw_table(pointer_to_table_map: u32) -> Self {
-        Self::new(pointer_to_table_map as _, false, false, OpCode::ReadFromMap, ValueTag::TablePtr)
+        Self::new(pointer_to_table_map as _, OpCode::ReadFromMap, ValueTag::TablePtr)
+    }
+
+    pub fn option(value: Option<Word>, opcode: OpCode, gc: &mut GarbageCollector) -> Self {
+        let ptr = HeapOption::write(value, opcode);
+        gc.trace(ptr);
+        ptr
+    }
+
+    pub fn raw_option(pointer_to_option_map: u32) -> Self {
+        Self::new(pointer_to_option_map as _, OpCode::ReadFromMap, ValueTag::OptionPtr)
     }
 }
 
@@ -97,6 +107,18 @@ impl Word {
         unsafe { &mut self.get_mut::<HeapTable>().0 }
     }
 
+    pub fn as_option(&self) -> &mut Option<Word> {
+        debug_assert!(self.is_tag_for_heap());
+        assert_eq!(self.tag(), ValueTag::OptionPtr);
+        unsafe { &mut self.get_mut::<HeapOption>().0 }
+    }
+
+    pub fn as_option_mut(&mut self) -> &mut Option<Word> {
+        debug_assert!(self.is_tag_for_heap());
+        assert_eq!(self.tag(), ValueTag::OptionPtr);
+        unsafe { &mut self.get_mut::<HeapOption>().0 }
+    }
+
     pub fn free(self) {
         unsafe {
             match self.tag() {
@@ -145,6 +167,10 @@ impl Display for Word {
                 let tbl = self.as_table();
                 write!(f, "[{}]", tbl.iter().map(|(k, v)| format!("{}: {}", k, v)).collect::<String>())
             }
+            ValueTag::OptionPtr => write!(f, "{}", self.as_option()
+                .map(|v| format!("{}?", v))
+                .unwrap_or("no".to_string())
+            ),
         }
     }
 }

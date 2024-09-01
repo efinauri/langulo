@@ -61,6 +61,7 @@ pub struct Emitter {
     heap_floats: Vec<f64>,
     heap_strings: Vec<String>,
     heap_tables: Vec<Vec<u64>>, // tables are serialized (just a sequence of key/value words)
+    heap_options: Vec<u64>, // options are serialized as the wrapped word or all 1s for None
 
     local_variables: Vec<LocalVarInfo>,
     curr_scope: usize,
@@ -88,6 +89,7 @@ impl Emitter {
             heap_floats: Vec::new(),
             heap_strings: Vec::new(),
             heap_tables: Vec::new(),
+            heap_options: Vec::new(),
             local_variables: Vec::new(),
             curr_scope: 0,
         })
@@ -182,6 +184,7 @@ impl Emitter {
             println!("floats: {:?}", self.heap_floats);
             println!("tables: {:?}", self.heap_tables);
             println!("strings: {:?}", self.heap_strings);
+            println!("options: {:?}", self.heap_options);
         }
         // writing the len of everything so that the parsing can be exact
         // writer.write_all(&[0xED, 0x0C, 0x0D, 0xED])?; // magic number
@@ -216,6 +219,13 @@ impl Emitter {
             writer.write_all(bytes)?;
         }
         writer.write_all(&[0x05])?;
+        let num_options = self.heap_options.len() as u32;
+        writer.write_all(&num_options.to_le_bytes())?;
+        for option in &self.heap_options {
+            writer.write_all(&option.to_le_bytes())?;
+        }
+
+        writer.write_all(&[0x06])?;
         let num_vars = self.local_variables.len() as u32;
         writer.write_all(&num_vars.to_le_bytes())?;
 

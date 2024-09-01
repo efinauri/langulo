@@ -52,8 +52,6 @@ macro_rules! heap_write {
             let alloc = allocate(Layout::new::<Self>());
             let w = Word::new(
                 alloc,
-                false,
-                false,
                 $opcode,
                 $tag,
             );
@@ -140,6 +138,27 @@ impl HeapValue for HeapTable {
     fn write(value: Self::Inner, opcode: OpCode) -> Word {
         heap_write!(value, ValueTag::TablePtr, opcode)
     }
+    fn destroy(w: Word) {
+        heap_destroy!(w);
+    }
+}
+
+pub struct HeapOption(pub Option<Word>);
+impl HeapValue for HeapOption {
+    type Inner = Option<Word>;
+
+    fn read(w: &Word) -> &Self::Inner {
+        heap_read!(w)
+    }
+
+    fn get_inner_mut(w: &mut Word) -> &mut Self::Inner {
+        heap_get_inner_mut!(w)
+    }
+
+    fn write(value: Self::Inner, opcode: OpCode) -> Word {
+        heap_write!(value, ValueTag::OptionPtr, opcode)
+    }
+
     fn destroy(w: Word) {
         heap_destroy!(w);
     }

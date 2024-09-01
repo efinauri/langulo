@@ -32,7 +32,7 @@ fn read_vec<R: Read>(reader: &mut R, length: usize) -> io::Result<Vec<u8>> {
 }
 
 impl VM {
-    pub fn new(bytecode: Vec<Word>, heap_floats: Vec<f64>, heap_strings: Vec<Option<String>>, heap_tables: Vec<Option<Vec<u8>>>) -> Self {
+    pub fn new(bytecode: Vec<Word>, heap_floats: Vec<f64>, heap_strings: Vec<Option<String>>, heap_tables: Vec<Option<Vec<u8>>>, heap_options: Vec<Option<u64>>) -> Self {
         VM {
             bytecode,
             vars: VecDeque::new(),
@@ -42,6 +42,7 @@ impl VM {
             heap_floats,
             heap_strings,
             heap_tables,
+            heap_options,
         }
     }
 
@@ -55,6 +56,7 @@ impl VM {
             heap_floats: Vec::new(),
             heap_strings: Vec::new(),
             heap_tables: Vec::new(),
+            heap_options: Vec::new(),
         }
     }
     pub fn from_compiled_stream<R: Read>(mut reader: R) -> io::Result<Self> {
@@ -62,6 +64,7 @@ impl VM {
         let mut heap_floats = Vec::new();
         let mut heap_tables = Vec::new();
         let mut heap_strings = Vec::new();
+        let mut heap_options = Vec::new();
 
         let mut section_id = [0u8; 1];
         reader.read_exact(&mut section_id)?;
@@ -100,6 +103,14 @@ impl VM {
         }
         reader.read_exact(&mut section_id)?;
         assert_eq!(section_id[0], 0x05, "Invalid compiled stream");
+        let num_options = read_u32(&mut reader)? as usize;
+        for _ in 0..num_options {
+            let option_data = read_u64(&mut reader)?;
+            heap_options.push(Some(option_data));
+        }
+
+        reader.read_exact(&mut section_id)?;
+        assert_eq!(section_id[0], 0x06, "Invalid compiled stream");
         let num_vars = read_u32(&mut reader)? as usize;
 
         #[feature(test)] {
@@ -118,6 +129,7 @@ impl VM {
             heap_floats,
             heap_strings,
             heap_tables,
+            heap_options,
         })
     }
 }

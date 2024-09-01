@@ -8,7 +8,8 @@ use crate::word::structure::{OpCode, Word};
 use num_traits::ToBytes;
 use std::fs::File;
 use std::io;
-use std::io::{Read, Write};
+use std::io::Write;
+use std::ops::Index;
 use std::path::Path;
 
 macro_rules! cast_node {
@@ -26,7 +27,7 @@ macro_rules! emit_binary {
         $self.bytecode.push(lhs);
         let mut rhs = $self.emit_node(&$node.last_child().unwrap())?;
         if rhs.is_embeddable() {
-            rhs.change_opcode(OpCode::[<$opcode This>]);
+            rhs.set_opcode(OpCode::[<$opcode This>]);
         } else {
             $self.bytecode.push(rhs);
             return Ok(Word::int(0, OpCode::$opcode));
@@ -39,7 +40,7 @@ macro_rules! emit_unary {
     ($self:expr, $node:expr, $opcode:ident) => {paste::paste! {{
         let mut operand = $self.emit_node(&$node.first_child().unwrap())?;
         if operand.is_embeddable() {
-            operand.change_opcode(OpCode::[<$opcode This>]);
+            operand.set_opcode(OpCode::[<$opcode This>]);
         } else {
             $self.bytecode.push(operand);
             return Ok(Word::int(0, OpCode::$opcode));
@@ -60,9 +61,19 @@ pub struct Emitter {
     heap_floats: Vec<f64>,
     heap_strings: Vec<String>,
     heap_tables: Vec<Vec<u64>>, // tables are serialized (just a sequence of key/value words)
+
+    local_variables: Vec<LocalVarInfo>,
+    curr_scope: usize,
+}
+
+#[derive(Debug)]
+struct LocalVarInfo {
+    name: String,
+    scope: usize,
 }
 
 impl Emitter {
+
     pub fn new(input: &str) -> Result<Self, LanguloErr> {
         let mut parser = Parser::new(input);
         parser.parse()?;
@@ -77,6 +88,8 @@ impl Emitter {
             heap_floats: Vec::new(),
             heap_strings: Vec::new(),
             heap_tables: Vec::new(),
+            local_variables: Vec::new(),
+            curr_scope: 0,
         })
     }
 
@@ -118,6 +131,43 @@ impl Emitter {
             AstNode::LogicalOr => emit_binary!(self, node, LogicalOr),
             AstNode::LogicalXor => emit_binary!(self, node, LogicalXor),
             AstNode::Print => emit_unary!(self, node, Print),
+            // AstNode::Scope => {
+            // self.curr_scope += 1;
+            // for child in node.children() {
+            //     let child_word = self.emit_node(&child)?;
+            //     self.bytecode.push(child_word);
+            // }
+            // self.curr_scope -= 1;
+            //
+            // }
+            AstNode::Identifier => {
+                let ident_name = node.text().to_string();
+                let index = self.local_variables.iter().rposition(|el|el.name==ident_name);
+                let mut ident_word = Word::int(0, OpCode::GetLocal);
+                ident_word.set_aux(index.expect(&*format!("did not find varname in already defined vars. \nvars: {:?}", &self.local_variables)) as u32);
+                Ok(ident_word)
+            }
+            AstNode::VarDecl => {
+                let var_name = node.text().to_string().split_whitespace().next().unwrap().to_string();
+
+                debug_assert!(
+                    !self.local_variables.iter()
+                    .any(|var| var.name == var_name && var.scope == self.curr_scope),
+                );
+                self.local_variables.push(LocalVarInfo {
+                    name: var_name,
+                    scope: self.curr_scope,
+                });
+                // first_child could be the type hint
+                let mut decl_word = self.emit_node(&node.last_child().unwrap())?;
+                if decl_word.is_embeddable() {
+                    decl_word.set_opcode(OpCode::SetLocalThis);
+                    Ok(decl_word)
+                } else {
+                    self.bytecode.push(decl_word);
+                    Ok(Word::int(0, OpCode::SetLocal))
+                }
+            }
             _ => unimplemented!("todo: emit node type {:?}", node),
         }
     }
@@ -126,6 +176,7 @@ impl Emitter {
     pub fn to_bytecode(self) -> Vec<Word> { self.bytecode }
 
     pub fn write_to_stream<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        debug_assert!(self.bytecode.len() > 0, "did not call emit() before writing to stream");
         #[cfg(test)] {
             println!("will write the following heap values:");
             println!("floats: {:?}", self.heap_floats);
@@ -133,6 +184,7 @@ impl Emitter {
             println!("strings: {:?}", self.heap_strings);
         }
         // writing the len of everything so that the parsing can be exact
+        // writer.write_all(&[0xED, 0x0C, 0x0D, 0xED])?; // magic number
         writer.write_all(&[0x01])?;
         let bytecode_len = self.bytecode.len() as u32;
         writer.write_all(&bytecode_len.to_le_bytes())?;
@@ -163,6 +215,9 @@ impl Emitter {
             writer.write_all(&(bytes.len() as u32).to_le_bytes())?;
             writer.write_all(bytes)?;
         }
+        writer.write_all(&[0x05])?;
+        let num_vars = self.local_variables.len() as u32;
+        writer.write_all(&num_vars.to_le_bytes())?;
 
         Ok(())
     }
@@ -202,9 +257,17 @@ mod tests {
         ]);
         // todo could write in this optimization
         expect_emit("3*4+2;", vec![ // 1 less instruction!
-            Word::int(3, OpCode::Value),
-            Word::int(4, OpCode::MultiplyThis),
-            Word::int(2, OpCode::AddThis),
+                                    Word::int(3, OpCode::Value),
+                                    Word::int(4, OpCode::MultiplyThis),
+                                    Word::int(2, OpCode::AddThis),
+        ]);
+    }
+
+    #[test]
+    fn variable_decl() {
+        expect_emit("var x = 3; x = 4;", vec![
+            Word::int(3, OpCode::SetLocalThis),
+            Word::int(4, OpCode::SetLocalThis),
         ]);
     }
 }

@@ -17,7 +17,7 @@ const fn bitmask(from: u32, to_excluded: u32) -> u64 {
 /// or a pointer to its location in the heap.
 pub struct Word(pub(crate) *mut u8);
 
-// the first 3 bits of the word represent the type of the value (if any)
+/// the first 3 bits of the word represent the type of the value (if any)
 
 #[derive(Debug, FromPrimitive, ToPrimitive, PartialEq, PartialOrd, Copy, Clone)]
 #[repr(u8)]
@@ -32,12 +32,14 @@ pub enum ValueTag {
     TablePtr,
 }
 
-/// then we have the two option flags: is option (A) and is none (B)
+/// then we have the two option flags, which still inform the type of the value: is option (A) and is none (B)
 /// the behavior of the flag combination (AB) on a tag T is the following:
 /// - 00 -> T
 /// - 10 -> None
 /// - 11 -> Some<T>
-/// - 01 -> Some<next word> // todo lot of wasted space this way, think of a way to make this word more informative, maybe it could be the full type layour of the next word
+/// - 01 -> Some<next word>
+
+/// information about the operation to execute with this value.
 
 #[derive(Debug, Clone, PartialEq, FromPrimitive, ToPrimitive)]
 #[repr(u8)]
@@ -51,6 +53,7 @@ pub enum OpCode {
     Call,
     CallBuiltin,
     SetLocal,
+    SetLocalThis,
     GetLocal,
     SetGlobal,
     GetGlobal,
@@ -96,7 +99,8 @@ pub enum OpCode {
     LessThanEqThis,
 }
 
-/// for now bits 11..32 are chaff
+/// bits 11..32 are more flexible and store auxiliary information that might be needed by some operations
+/// for example, when setting/getting a variable, the pointer to the variable stack is read from this section
 
 /// the rest is either the stack value or a heap pointer to it
 
@@ -104,15 +108,15 @@ pub const TAG_START: u64 = 0;
 pub const IS_OPTION_FLAG_START: u64 = 3;
 pub const IS_NONE_OPTION_FLAG_START: u64 = 4;
 pub const OPCODE_START: u64 = 5;
-pub const CHAFF_START: u64 = 11;
+pub const AUX_START: u64 = 11;
 pub const PTR_START: u64 = 32;
 
 pub const TAG_MASK: u64 = bitmask(TAG_START as u32, IS_OPTION_FLAG_START as u32);
 pub const IS_OPTION_FLAG_MASK: u64 =
     bitmask(IS_OPTION_FLAG_START as u32, IS_NONE_OPTION_FLAG_START as u32);
 pub const IS_NONE_OPTION_FLAG_MASK: u64 = bitmask(IS_NONE_OPTION_FLAG_START as u32, OPCODE_START as u32);
-pub const OPCODE_MASK: u64 = bitmask(OPCODE_START as u32, CHAFF_START as u32);
-pub const CHAFF_MASK: u64 = bitmask(CHAFF_START as u32, PTR_START as u32);
+pub const OPCODE_MASK: u64 = bitmask(OPCODE_START as u32, AUX_START as u32);
+pub const AUX_MASK: u64 = bitmask(AUX_START as u32, PTR_START as u32);
 pub const PTR_MASK: u64 = bitmask(PTR_START as u32, 64);
 
 impl Debug for Word {
@@ -125,13 +129,13 @@ impl Debug for Word {
         {:?} {:?} {}\n",
             self.0 as usize,
             "ptr",
-            "chaff",
+            "aux",
             "opcode",
             "B",
             "A",
             "tag",
             self.ptr() as u32,
-            self.chaff(),
+            self.aux(),
             self.opcode().to_u8().unwrap(),
             self.is_option() as u8,
             self.is_none() as u8,
@@ -147,8 +151,8 @@ impl Word {
     pub fn ptr(self) -> *mut u8 {
         ((self.0 as u64 & PTR_MASK) >> PTR_START) as _
     }
-    pub fn chaff(&self) -> u32 {
-        ((self.0 as u64 & CHAFF_MASK) >> CHAFF_START) as _
+    pub fn aux(&self) -> u32 {
+        ((self.0 as u64 & AUX_MASK) >> AUX_START) as _
     }
     pub fn is_option(&self) -> bool {
         ((self.0 as u64 & IS_OPTION_FLAG_MASK) >> IS_OPTION_FLAG_START) == 1
@@ -231,7 +235,7 @@ impl Word {
         ) as _;
     }
 
-    pub fn change_tag(&mut self, new_tag: ValueTag, is_option: bool, is_none: bool) {
+    pub fn set_tag(&mut self, new_tag: ValueTag, is_option: bool, is_none: bool) {
         self.0 = (
             ((self.0 as u64 & !TAG_MASK) | ((new_tag as u64) << TAG_START))
                 | ((self.0 as u64 & !IS_OPTION_FLAG_MASK) | ((is_option as u64) << IS_OPTION_FLAG_START))
@@ -239,9 +243,15 @@ impl Word {
         ) as _
     }
 
-    pub fn change_opcode(&mut self, new_opcode: OpCode) {
+    pub fn set_opcode(&mut self, new_opcode: OpCode) {
         self.0 = (
             (self.0 as u64 &!OPCODE_MASK) | ((new_opcode as u64) << OPCODE_START)
+        ) as _;
+    }
+
+    pub fn set_aux(&mut self, new_aux: u32) {
+        self.0 = (
+            (self.0 as u64 &!AUX_MASK) | ((new_aux as u64) << AUX_START)
         ) as _;
     }
 

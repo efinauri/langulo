@@ -1,10 +1,23 @@
-use crate::parser::Parser;
 use codespan_reporting::files::SimpleFile;
 use colored::Colorize;
 use rustyline::DefaultEditor;
 use std::io;
-use std::io::Write;
+use std::io::{Cursor, Write};
 use std::string::String;
+use crate::emitter::Emitter;
+use crate::vm::VM;
+
+macro_rules! ok_or_printerr {
+    ($sf:expr, $action:expr) => {
+        match $action {
+            Ok(v) => v,
+            Err(e) => {
+                e.emit($sf);
+                continue;
+            }
+        }
+    };
+}
 
 pub fn serve_repl() {
     let mut stdout = io::stdout();
@@ -43,11 +56,15 @@ pub fn serve_repl() {
         source.push('\n');
         let sf = SimpleFile::new("repl.rs", &source);
 
-        let mut parser = Parser::new(&*input);
-        if let Err(err) = parser.parse() {
-            err.emit(&sf);
-        };
-
-        println!("{:#?}", parser.to_ast())
+        // todo extend with incremental compilation. for now, it recompiles everything each input
+        let mut emitter = ok_or_printerr!(&sf, Emitter::new(source.as_str()));
+        let mut buf = vec![];
+        ok_or_printerr!(&sf, emitter.emit());
+        emitter.write_to_stream(&mut buf).expect("could not write to stream");
+        let mut cursor = Cursor::new(buf);
+        let mut vm = VM::from_compiled_stream(&mut cursor).expect("could not create VM");
+        ok_or_printerr!(&sf, vm.run());
+        let result = vm.finalize();
+        println!("{}", result)
     }
 }

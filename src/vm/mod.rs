@@ -1,10 +1,9 @@
 use crate::errors::err::LanguloErr;
 use crate::vm::garbage_collector::GarbageCollector;
+use crate::word::heap::decode_table;
 use crate::word::structure::{OpCode, ValueTag, Word};
 use std::collections::VecDeque;
-use std::io;
 use std::io::Read;
-use crate::word::heap::decode_table;
 
 pub mod garbage_collector;
 mod input;
@@ -28,6 +27,7 @@ macro_rules! run_binary {
 
 pub struct VM {
     bytecode: Vec<Word>,
+    vars: VecDeque<Word>,
     stack: VecDeque<Word>,
     gc: GarbageCollector,
     ip: usize,
@@ -38,31 +38,6 @@ pub struct VM {
 }
 
 impl VM {
-    pub fn new(bytecode: Vec<Word>, heap_floats: Vec<f64>, heap_strings: Vec<Option<String>>, heap_tables: Vec<Option<Vec<u8>>>) -> Self {
-        VM {
-            bytecode,
-            stack: VecDeque::new(),
-            gc: GarbageCollector::new(),
-            ip: 0,
-            heap_floats,
-            heap_strings,
-            heap_tables,
-        }
-    }
-
-    pub fn from_bytecode_only(bytecode: Vec<Word>) -> Self {
-        VM {
-            bytecode,
-            stack: VecDeque::new(),
-            gc: GarbageCollector::new(),
-            ip: 0,
-            heap_floats: Vec::new(),
-            heap_strings: Vec::new(),
-            heap_tables: Vec::new(),
-        }
-    }
-
-
 
     pub fn pop_value(&mut self) -> Word {
         let back = self.stack.pop_back().expect("stack underflow");
@@ -72,13 +47,13 @@ impl VM {
 
     pub fn run(&mut self) -> Result<(), LanguloErr> {
         loop {
-            let current = &self.bytecode[self.ip];
+            debug_assert!(self.ip < self.bytecode.len());
+            let mut current = &mut self.bytecode[self.ip];
             #[feature(debug)] {
                 println!("running bytecode [{}]: {:?}", self.ip, current);
             }
             self.ip += 1;
-            debug_assert!(self.ip <= self.bytecode.len());
-            match current.opcode() {
+            match &current.opcode() {
                 OpCode::Stop => break,
                 OpCode::Value => self.stack.push_back(*current),
                 OpCode::PrintThis => println!("(TEMPORARY PRINT) {:?}", self.stack.back().unwrap()), // todo impl Display and show that
@@ -123,6 +98,20 @@ impl VM {
                 OpCode::PowerThis => self.stack.back_mut().unwrap().exponentiate_inplace(current, &mut self.gc)?,
                 OpCode::NegateThis => self.stack.push_back(Word::bool(!current.to_bool(), OpCode::Value)),
 
+                OpCode::SetLocalThis => {
+                    current.set_opcode(OpCode::Value);
+                    self.vars.push_back(*current);
+                    self.stack.push_back(*current);
+                }
+                OpCode::SetLocal => {
+                    self.vars.push_back(*self.stack.back().unwrap());
+                }
+                OpCode::GetLocal => {
+                    let local_idx = current.aux() as usize;
+                    debug_assert!(local_idx < self.vars.len());
+                    self.stack.push_back(self.vars[local_idx]);
+                }
+
                 OpCode::ReadFromMap => {
                     let map_idx = current.value() as usize;
                     debug_assert!(current.is_tag_for_heap());
@@ -151,8 +140,6 @@ impl VM {
                         _ => return Err(LanguloErr::vm("reading from map a nonheap value")),
                     }
                 }
-                // OpCode::SetLocal
-                // OpCode::GetLocal
 
                 _ => unimplemented!("opcode not implemented: {:?}", current.opcode()),
             }
@@ -161,14 +148,13 @@ impl VM {
     }
 
     pub fn finalize(mut self) -> Word {
-        debug_assert_eq!(self.stack.len(), 1);
+        // no guarantee that this is the last element in the stack. for example this is a valid program: 3; 2; 1;
         self.pop_value()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::emitter::Emitter;
     use super::*;
     use crate::word::structure::Word;
     fn expect_float_vm_execution_approx(lhs: f64, rhs: f64, op: OpCode, expected_output: f64) {

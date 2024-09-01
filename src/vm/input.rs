@@ -32,6 +32,31 @@ fn read_vec<R: Read>(reader: &mut R, length: usize) -> io::Result<Vec<u8>> {
 }
 
 impl VM {
+    pub fn new(bytecode: Vec<Word>, heap_floats: Vec<f64>, heap_strings: Vec<Option<String>>, heap_tables: Vec<Option<Vec<u8>>>) -> Self {
+        VM {
+            bytecode,
+            vars: VecDeque::new(),
+            stack: VecDeque::new(),
+            gc: GarbageCollector::new(),
+            ip: 0,
+            heap_floats,
+            heap_strings,
+            heap_tables,
+        }
+    }
+
+    pub fn from_bytecode_only(bytecode: Vec<Word>) -> Self {
+        VM {
+            bytecode,
+            stack: VecDeque::new(),
+            vars: VecDeque::new(),
+            gc: GarbageCollector::new(),
+            ip: 0,
+            heap_floats: Vec::new(),
+            heap_strings: Vec::new(),
+            heap_tables: Vec::new(),
+        }
+    }
     pub fn from_compiled_stream<R: Read>(mut reader: R) -> io::Result<Self> {
         let mut bytecode = Vec::new();
         let mut heap_floats = Vec::new();
@@ -73,6 +98,9 @@ impl VM {
             let string = String::from_utf8(str_data).expect("Invalid UTF-8 data");
             heap_strings.push(Some(string));
         }
+        reader.read_exact(&mut section_id)?;
+        assert_eq!(section_id[0], 0x05, "Invalid compiled stream");
+        let num_vars = read_u32(&mut reader)? as usize;
 
         #[feature(test)] {
             println!("spinning up the vm with these raw heap maps:");
@@ -83,6 +111,7 @@ impl VM {
 
         Ok(Self {
             bytecode,
+            vars: VecDeque::with_capacity(num_vars),
             stack: VecDeque::new(),
             gc: GarbageCollector::new(),
             ip: 0,

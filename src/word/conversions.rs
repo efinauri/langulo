@@ -3,6 +3,7 @@ use crate::word::heap::{HeapFloat, HeapStr, HeapTable, HeapValue};
 use crate::word::structure::{OpCode, ValueTag, Word};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::fmt::Display;
 
 // constructors
 impl Word {
@@ -23,7 +24,7 @@ impl Word {
         gc.trace(ptr);
         ptr
     }
-    
+
     pub fn raw_float(pointer_to_float_map: u32) -> Self {
         Self::new(pointer_to_float_map as _, false, false, OpCode::ReadFromMap, ValueTag::FloatPtr)
     }
@@ -112,11 +113,11 @@ impl PartialEq for Word {
     fn eq(&self, other: &Self) -> bool {
         self.tag() == other.tag()
             && match self.tag() {
-                ValueTag::Int | ValueTag::Bool | ValueTag::Char => self.value() == other.value(),
-                ValueTag::FloatPtr => self.to_float() == other.to_float(),
-                ValueTag::StrPtr => self.as_str() == other.as_str(),
-                _ => unimplemented!("no partialeq impl for tag {:?}", self.tag()),
-            }
+            ValueTag::Int | ValueTag::Bool | ValueTag::Char => self.value() == other.value(),
+            ValueTag::FloatPtr => self.to_float() == other.to_float(),
+            ValueTag::StrPtr => self.as_str() == other.as_str(),
+            _ => unimplemented!("no partialeq impl for tag {:?}", self.tag()),
+        }
     }
 }
 impl PartialOrd for Word {
@@ -127,6 +128,23 @@ impl PartialOrd for Word {
             ValueTag::FloatPtr => self.to_float().partial_cmp(&other.to_float()),
             ValueTag::StrPtr => self.as_str().partial_cmp(&other.as_str()),
             _ => unimplemented!("no partialord impl for tag {:?}", self.tag()),
+        }
+    }
+}
+
+impl Display for Word {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.tag() {
+            ValueTag::Int => write!(f, "{}", self.to_int()),
+            ValueTag::Bool => write!(f, "{}", self.to_bool()),
+            ValueTag::Char => write!(f, "{}", self.to_char()),
+            ValueTag::FnPtr => unimplemented!("cannot display fnptr"),
+            ValueTag::FloatPtr => write!(f, "{}", self.to_float()),
+            ValueTag::StrPtr => write!(f, "\"{}\"", self.as_str()),
+            ValueTag::TablePtr => {
+                let tbl = self.as_table();
+                write!(f, "[{}]", tbl.iter().map(|(k, v)| format!("{}: {}", k, v)).collect::<String>())
+            }
         }
     }
 }
@@ -150,7 +168,6 @@ mod tests {
         assert_eq!(w.tag(), ValueTag::Int);
         assert_eq!(w.opcode(), OpCode::Add);
         assert_eq!(w.to_int(), -21);
-
     }
 
     #[test]

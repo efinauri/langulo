@@ -35,18 +35,10 @@ impl Word {
         ptr
     }
 
-    pub fn raw_str(pointer_to_str_map: u32) -> Self {
-        Self::new(pointer_to_str_map as _, OpCode::ReadFromMap, ValueTag::StrPtr)
-    }
-
     pub fn table(value: BTreeMap<Word, Word>, opcode: OpCode, gc: &mut GarbageCollector) -> Self {
         let ptr = HeapTable::write(value, opcode);
         gc.trace(ptr);
         ptr
-    }
-
-    pub fn raw_table(pointer_to_table_map: u32) -> Self {
-        Self::new(pointer_to_table_map as _, OpCode::ReadFromMap, ValueTag::TablePtr)
     }
 
     pub fn option(value: Option<Word>, opcode: OpCode, gc: &mut GarbageCollector) -> Self {
@@ -55,9 +47,6 @@ impl Word {
         ptr
     }
 
-    pub fn raw_option(pointer_to_option_map: u32) -> Self {
-        Self::new(pointer_to_option_map as _, OpCode::ReadFromMap, ValueTag::OptionPtr)
-    }
 }
 
 // finalizers
@@ -80,19 +69,19 @@ impl Word {
     pub fn to_float(self) -> f64 {
         debug_assert!(self.is_tag_for_heap());
         debug_assert_eq!(self.tag(), ValueTag::FloatPtr);
-        unsafe { *HeapFloat::read(&self) }
+        *HeapFloat::read(&self)
     }
 
     pub fn as_str(&self) -> &str {
         debug_assert!(self.is_tag_for_heap());
         debug_assert_eq!(self.tag(), ValueTag::StrPtr);
-        unsafe { HeapStr::read(&self) }
+        HeapStr::read(&self)
     }
 
     pub fn as_str_mut(&mut self) -> &mut String {
         debug_assert!(self.is_tag_for_heap());
         debug_assert_eq!(self.tag(), ValueTag::StrPtr);
-        unsafe { &mut self.get_mut::<HeapStr>().0 }
+        &mut self.get_mut::<HeapStr>().0
     }
 
     pub fn as_table(&self) -> &BTreeMap<Word, Word> {
@@ -171,6 +160,7 @@ impl Display for Word {
                 .map(|v| format!("{}?", v))
                 .unwrap_or("no".to_string())
             ),
+            ValueTag::Special => write!(f, "{}", if self.to_bool() {"no"} else {"_"})
         }
     }
 }

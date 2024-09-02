@@ -1,9 +1,9 @@
-use std::collections::VecDeque;
-use std::io;
-use std::io::Read;
 use crate::vm::garbage_collector::GarbageCollector;
 use crate::vm::VM;
 use crate::word::structure::Word;
+use std::collections::VecDeque;
+use std::io;
+use std::io::Read;
 
 fn read_bytes<R: Read>(reader: &mut R, buffer: &mut [u8]) -> io::Result<()> {
     reader.read_exact(buffer)?;
@@ -32,7 +32,7 @@ fn read_vec<R: Read>(reader: &mut R, length: usize) -> io::Result<Vec<u8>> {
 }
 
 impl VM {
-    pub fn new(bytecode: Vec<Word>, heap_floats: Vec<f64>, heap_strings: Vec<Option<String>>, heap_tables: Vec<Option<Vec<u8>>>, heap_options: Vec<Option<u64>>) -> Self {
+    pub fn new(bytecode: Vec<Word>, heap_floats: Vec<f64>, heap_strings: Vec<Option<String>>) -> Self {
         VM {
             bytecode,
             vars: VecDeque::new(),
@@ -41,8 +41,6 @@ impl VM {
             ip: 0,
             heap_floats,
             heap_strings,
-            heap_tables,
-            heap_options,
         }
     }
 
@@ -55,16 +53,12 @@ impl VM {
             ip: 0,
             heap_floats: Vec::new(),
             heap_strings: Vec::new(),
-            heap_tables: Vec::new(),
-            heap_options: Vec::new(),
         }
     }
     pub fn from_compiled_stream<R: Read>(mut reader: R) -> io::Result<Self> {
         let mut bytecode = Vec::new();
         let mut heap_floats = Vec::new();
-        let mut heap_tables = Vec::new();
         let mut heap_strings = Vec::new();
-        let mut heap_options = Vec::new();
 
         let mut section_id = [0u8; 1];
         reader.read_exact(&mut section_id)?;
@@ -86,14 +80,6 @@ impl VM {
         reader.read_exact(&mut section_id)?;
         assert_eq!(section_id[0], 0x03, "Invalid compiled stream");
 
-        let num_tables = read_u32(&mut reader)? as usize;
-        for _ in 0..num_tables {
-            let table_len = read_u32(&mut reader)? as usize;
-            let table_data = read_vec(&mut reader, table_len)?;
-            heap_tables.push(Some(table_data));
-        }
-        reader.read_exact(&mut section_id)?;
-        assert_eq!(section_id[0], 0x04, "Invalid compiled stream");
         let num_strings = read_u32(&mut reader)? as usize;
         for _ in 0..num_strings {
             let str_len = read_u32(&mut reader)? as usize;
@@ -101,22 +87,14 @@ impl VM {
             let string = String::from_utf8(str_data).expect("Invalid UTF-8 data");
             heap_strings.push(Some(string));
         }
-        reader.read_exact(&mut section_id)?;
-        assert_eq!(section_id[0], 0x05, "Invalid compiled stream");
-        let num_options = read_u32(&mut reader)? as usize;
-        for _ in 0..num_options {
-            let option_data = read_u64(&mut reader)?;
-            heap_options.push(Some(option_data));
-        }
 
         reader.read_exact(&mut section_id)?;
-        assert_eq!(section_id[0], 0x06, "Invalid compiled stream");
+        assert_eq!(section_id[0], 0x04, "Invalid compiled stream");
         let num_vars = read_u32(&mut reader)? as usize;
 
         #[feature(test)] {
             println!("spinning up the vm with these raw heap maps:");
             println!("heap floats: {:?}", heap_floats);
-            println!("heap tables: {:?}", heap_tables);
             println!("heap strings: {:?}", heap_strings);
         }
 
@@ -128,17 +106,30 @@ impl VM {
             ip: 0,
             heap_floats,
             heap_strings,
-            heap_tables,
-            heap_options,
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::emitter::Emitter;
-    use crate::word::structure::OpCode;
     use super::*;
+    use crate::emitter::Emitter;
+    #[test]
+    fn emit_stream_with_heap_allocs() {
+        let mut emitter = Emitter::new(r#"
+        3.3 + 5.6;
+        "#).expect("could not emit");
+        emitter.emit().unwrap();
+        let mut buf = vec![];
+        emitter.write_to_stream(&mut buf).expect("could not write to stream");
+        let mut cursor = io::Cursor::new(buf);
+        let mut vm = VM::from_compiled_stream(&mut cursor).expect("failed to spin vm up from stream");
+        vm.run().expect("error while running");
+        let result = vm.finalize();
+        assert_eq!(result.to_float(), 3.3 + 5.6);
+    }
+
+    use crate::word::structure::{OpCode, ValueTag};
 
     #[test]
     fn from_emitted_stream() {
@@ -156,9 +147,9 @@ mod tests {
     }
 
     #[test]
-    fn emit_stream_with_heap_allocs() {
+    fn emit_option() {
         let mut emitter = Emitter::new(r#"
-        3.3 + 5.6;
+        3??;
         "#).expect("could not emit");
         emitter.emit().unwrap();
         let mut buf = vec![];
@@ -166,7 +157,20 @@ mod tests {
         let mut cursor = io::Cursor::new(buf);
         let mut vm = VM::from_compiled_stream(&mut cursor).expect("failed to spin vm up from stream");
         vm.run().expect("error while running");
+
         let result = vm.finalize();
-        assert_eq!(result.to_float(), 3.3 + 5.6);
+        assert_eq!(result.tag(), ValueTag::OptionPtr);
+        let result = result.as_option();
+        assert!(result.is_some());
+        println!("result:\n {:?}", result);
+
+        let inner = result.expect("expected a nested value");
+        assert_eq!(inner.tag(), ValueTag::OptionPtr);
+        let inner = inner.as_option();
+        // assert!(inner.is_some());
+        // println!("inner:\n {:?}", inner);
+
+        // let integer = inner.expect("expected a number");
+        // assert_eq!(integer, Word::int(3, OpCode::Value));
     }
 }

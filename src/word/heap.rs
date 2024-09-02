@@ -47,8 +47,7 @@ macro_rules! heap_read {
 }
 
 macro_rules! heap_write {
-    ($input:expr, $tag:expr, $opcode:expr) => {
-        unsafe {
+    ($input:expr, $tag:expr, $opcode:expr) => {{
             let alloc = allocate(Layout::new::<Self>());
             let w = Word::new(
                 alloc,
@@ -58,11 +57,10 @@ macro_rules! heap_write {
 
             debug_assert_eq!(alloc as u32, w.ptr() as u32);
 
-            let container = unsafe { w.get_mut::<Self>() };
+            let container = w.get_mut::<Self>();
             init!(container.0 => $input);
             w
-        }
-    }
+        }}
 }
 
 macro_rules! heap_destroy {

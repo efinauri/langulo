@@ -1,21 +1,11 @@
 use crate::errors::err::LanguloErr;
 use crate::vm::garbage_collector::GarbageCollector;
-use crate::word::heap::decode_table;
+use crate::word::heap::Table;
 use crate::word::structure::{OpCode, ValueTag, Word};
 use std::collections::VecDeque;
-use std::io::Read;
 
 pub mod garbage_collector;
 mod input;
-
-macro_rules! branch_binary {
-    ($opcode:ident, $method:ident) => {
-        paste! {
-            OpCode::$opcode => run_binary!(self, $method),
-            OpCode::[<$opcode This>] => self.stack.back_mut().unwrap().$method(current),
-        }
-    };
-}
 
 macro_rules! run_binary {
     ($vm:expr, $op:ident) => {{
@@ -34,12 +24,9 @@ pub struct VM {
     heap_floats: Vec<f64>,
     // wrapped in a option so that the value can be taken without copying
     heap_strings: Vec<Option<String>>,
-    heap_tables: Vec<Option<Vec<u8>>>,
-    heap_options: Vec<Option<u64>>,
 }
 
 impl VM {
-
     pub fn pop_value(&mut self) -> Word {
         let back = self.stack.pop_back().expect("stack underflow");
         debug_assert_eq!(back.opcode(), OpCode::Value);
@@ -49,15 +36,15 @@ impl VM {
     pub fn run(&mut self) -> Result<(), LanguloErr> {
         loop {
             debug_assert!(self.ip < self.bytecode.len());
-            let mut current = &mut self.bytecode[self.ip];
+            let current = &mut self.bytecode[self.ip];
             #[feature(debug)] {
-                println!("running bytecode [{}]: {:?}", self.ip, current);
+                println!("running bytecode [{}]:\n{:?}", self.ip, current);
             }
             self.ip += 1;
             match &current.opcode() {
                 OpCode::Stop => break,
                 OpCode::Value => self.stack.push_back(*current),
-                OpCode::PrintThis => println!("(TEMPORARY PRINT) {:?}", self.stack.back().unwrap()), // todo impl Display and show that
+                OpCode::PrintThis => println!("{}", self.stack.back().unwrap()),
 
                 OpCode::Add => run_binary!(self, add_inplace),
                 OpCode::AddThis => self.stack.back_mut().unwrap().add_inplace(current)?,
@@ -113,6 +100,7 @@ impl VM {
                     self.stack.push_back(self.vars[local_idx]);
                 }
 
+                OpCode::WrapInOptionThis => {}
                 OpCode::ReadFromMap => {
                     let map_idx = current.value() as usize;
                     debug_assert!(current.is_tag_for_heap());
@@ -124,27 +112,21 @@ impl VM {
                             self.stack.push_back(word);
                         }
                         ValueTag::StrPtr => {
-                            let mut string = self.heap_strings.get_mut(map_idx)
+                            let string = self.heap_strings.get_mut(map_idx)
                                 .expect("readfrommap pointing to invalid raw string");
                             let string = string.take().expect("string already taken");
                             let word = Word::str(&*string, OpCode::Value, &mut self.gc);
                             self.stack.push_back(word);
                         }
                         ValueTag::TablePtr => {
-                            let mut table = self.heap_tables.get_mut(map_idx)
-                                .expect("readfrommap pointing to invalid raw table");
-                            let table = table.take().expect("table already taken");
-                            let table = decode_table(table);
-                            let word = Word::table(table, OpCode::Value, &mut self.gc);
-                            self.stack.push_back(word);
-                        }
-                        ValueTag::OptionPtr => {
-                            let mut option = self.heap_options.get_mut(map_idx)
-                                .expect("readfrommap pointing to invalid raw option");
-                            let option = option.take().expect("option already taken");
-                            let word = Word::option(
-                                if option > 0 { Some(Word::from_u64(option)) } else { None },
-                                OpCode::Value, &mut self.gc);
+                            let num_of_pairs = current.to_int();
+                            let mut tbl = Table::new();
+                            for _ in 0..num_of_pairs {
+                                let value = self.pop_value();
+                                let key = self.pop_value();
+                                tbl.insert(key, value);
+                            }
+                            let word = Word::table(tbl, OpCode::Value, &mut self.gc);
                             self.stack.push_back(word);
                         }
                         _ => return Err(LanguloErr::vm("reading from map a nonheap value")),

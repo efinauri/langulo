@@ -3,13 +3,12 @@ use crate::parser::ast::lang::LanguloSyntaxNode;
 use crate::parser::ast::node::AstNode;
 use crate::parser::Parser;
 use crate::typecheck::TypeChecker;
-use crate::word::heap::{encode_table, Table};
-use crate::word::structure::{OpCode, Word};
+use crate::word::heap::Table;
+use crate::word::structure::{OpCode, ValueTag, Word};
 use num_traits::ToBytes;
 use std::fs::File;
 use std::io;
 use std::io::Write;
-use std::ops::Index;
 use std::path::Path;
 
 macro_rules! cast_node {
@@ -21,33 +20,35 @@ macro_rules! cast_node {
     }
 }
 
-macro_rules! emit_binary {
-    ($self:expr, $node:expr, $opcode:ident) => {paste::paste! {{
-        let lhs = $self.emit_node(&$node.first_child().unwrap())?;
-        $self.bytecode.push(lhs);
-        let mut rhs = $self.emit_node(&$node.last_child().unwrap())?;
-        if rhs.is_embeddable() {
-            rhs.set_opcode(OpCode::[<$opcode This>]);
-        } else {
-            $self.bytecode.push(rhs);
+macro_rules! push_embeddable {
+    ($self:expr, $word:expr, $opcode:ident) => { paste::paste! {{
+        if $word.is_embeddable() {
+            $word.set_opcode(OpCode::[<$opcode This>]);
+            return Ok($word);
+        }
+        else {
+            $self.bytecode.push($word);
             return Ok(Word::int(0, OpCode::$opcode));
         }
-        Ok(rhs)
     }}};
 }
 
-macro_rules! emit_unary {
-    ($self:expr, $node:expr, $opcode:ident) => {paste::paste! {{
-        let mut operand = $self.emit_node(&$node.first_child().unwrap())?;
-        if operand.is_embeddable() {
-            operand.set_opcode(OpCode::[<$opcode This>]);
-        } else {
-            $self.bytecode.push(operand);
-            return Ok(Word::int(0, OpCode::$opcode));
-        }
-        Ok(operand)
-    }}};
+macro_rules! emit_binary {
+    ($self:expr, $node:expr, $opcode:ident) => {{
+        let lhs = $self.emit_node(&$node.first_child().unwrap())?;
+        $self.bytecode.push(lhs);
+        let mut rhs = $self.emit_node(&$node.last_child().unwrap())?;
+        push_embeddable!($self, rhs, $opcode);
+    }};
 }
+
+macro_rules! emit_unary {
+    ($self:expr, $node:expr, $opcode:ident) => {{
+        let mut operand = $self.emit_node(&$node.first_child().unwrap())?;
+        push_embeddable!($self, operand, $opcode);
+    }};
+}
+
 pub struct Emitter {
     type_checker: TypeChecker,
     ast_root: LanguloSyntaxNode,
@@ -60,8 +61,6 @@ pub struct Emitter {
     /// the VM to load them to its runtime.
     heap_floats: Vec<f64>,
     heap_strings: Vec<String>,
-    heap_tables: Vec<Vec<u64>>, // tables are serialized (just a sequence of key/value words)
-    heap_options: Vec<u64>, // options are serialized as the wrapped word or all 1s for None
 
     local_variables: Vec<LocalVarInfo>,
     curr_scope: usize,
@@ -74,7 +73,6 @@ struct LocalVarInfo {
 }
 
 impl Emitter {
-
     pub fn new(input: &str) -> Result<Self, LanguloErr> {
         let mut parser = Parser::new(input);
         parser.parse()?;
@@ -88,8 +86,6 @@ impl Emitter {
             bytecode: Vec::new(),
             heap_floats: Vec::new(),
             heap_strings: Vec::new(),
-            heap_tables: Vec::new(),
-            heap_options: Vec::new(),
             local_variables: Vec::new(),
             curr_scope: 0,
         })
@@ -115,13 +111,20 @@ impl Emitter {
             }
             AstNode::Str => {
                 self.heap_strings.push(cast_node!(node, String)?);
-                Ok(Word::raw_str((self.heap_strings.len() - 1) as u32))
+                Ok(Word::new(0 as _, OpCode::ReadFromMap, ValueTag::StrPtr))
             }
             AstNode::Table => {
                 // todo eval table
                 let table = Table::new();
-                self.heap_tables.push(encode_table(&table));
-                Ok(Word::raw_table((self.heap_tables.len() - 1) as u32))
+                // todo here insert the number of pairs to read
+                Ok(Word::new(0 as _, OpCode::ReadFromMap, ValueTag::TablePtr))
+            }
+            AstNode::Option => {
+                let mut inner = node.first_child()
+                    .map(|inner| self.emit_node(&inner))
+                    .transpose()?
+                    .unwrap_or(Word::new(1 as _, OpCode::Value, ValueTag::Special));
+                push_embeddable!(self, inner, WrapInOption)
             }
 
             AstNode::Add => emit_binary!(self, node, Add),
@@ -144,7 +147,7 @@ impl Emitter {
             // }
             AstNode::Identifier => {
                 let ident_name = node.text().to_string();
-                let index = self.local_variables.iter().rposition(|el|el.name==ident_name);
+                let index = self.local_variables.iter().rposition(|el| el.name == ident_name);
                 let mut ident_word = Word::int(0, OpCode::GetLocal);
                 ident_word.set_aux(index.expect(&*format!("did not find varname in already defined vars. \nvars: {:?}", &self.local_variables)) as u32);
                 Ok(ident_word)
@@ -182,9 +185,7 @@ impl Emitter {
         #[cfg(test)] {
             println!("will write the following heap values:");
             println!("floats: {:?}", self.heap_floats);
-            println!("tables: {:?}", self.heap_tables);
             println!("strings: {:?}", self.heap_strings);
-            println!("options: {:?}", self.heap_options);
         }
         // writing the len of everything so that the parsing can be exact
         // writer.write_all(&[0xED, 0x0C, 0x0D, 0xED])?; // magic number
@@ -201,16 +202,8 @@ impl Emitter {
         for float in &self.heap_floats {
             writer.write_all(&float.to_le_bytes())?;
         }
+
         writer.write_all(&[0x03])?;
-        let num_tables = self.heap_tables.len() as u32;
-        writer.write_all(&num_tables.to_le_bytes())?;
-        for table in &self.heap_tables {
-            writer.write_all(&(table.len() as u32).to_le_bytes())?;
-            for &entry in table {
-                writer.write_all(&entry.to_le_bytes())?;
-            }
-        }
-        writer.write_all(&[0x04])?;
         let num_strings = self.heap_strings.len() as u32;
         writer.write_all(&num_strings.to_le_bytes())?;
         for string in &self.heap_strings {
@@ -218,14 +211,8 @@ impl Emitter {
             writer.write_all(&(bytes.len() as u32).to_le_bytes())?;
             writer.write_all(bytes)?;
         }
-        writer.write_all(&[0x05])?;
-        let num_options = self.heap_options.len() as u32;
-        writer.write_all(&num_options.to_le_bytes())?;
-        for option in &self.heap_options {
-            writer.write_all(&option.to_le_bytes())?;
-        }
 
-        writer.write_all(&[0x06])?;
+        writer.write_all(&[0x04])?;
         let num_vars = self.local_variables.len() as u32;
         writer.write_all(&num_vars.to_le_bytes())?;
 
@@ -279,5 +266,10 @@ mod tests {
             Word::int(3, OpCode::SetLocalThis),
             Word::int(4, OpCode::SetLocalThis),
         ]);
+    }
+
+    #[test]
+    fn options() {
+        // expect_emit("3??;")
     }
 }

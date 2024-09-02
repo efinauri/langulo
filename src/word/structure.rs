@@ -22,15 +22,20 @@ pub struct Word(pub(crate) *mut u8);
 #[derive(Debug, FromPrimitive, ToPrimitive, PartialEq, PartialOrd, Copy, Clone)]
 #[repr(u8)]
 pub enum ValueTag {
+    /// 0: "_", 1: "no"
+    Special,
     Int,
     Bool,
     Char,
 
     FnPtr,
+
     FloatPtr,
     StrPtr,
     TablePtr,
-    OptionPtr, // todo could this be a flag???
+    // todo try to make a flag for this when it wraps stack-allocated values (would make option<int> faster),
+    // and only keep this bottom one for heap values
+    OptionPtr,
 }
 
 /// information about the operation to execute with this value.
@@ -39,7 +44,7 @@ pub enum ValueTag {
 #[repr(u8)]
 pub enum OpCode {
     Value,
-    ReadFromMap, // given to compile-time, heap-allocated values. the value of a word with this opcode is an index to the value map read by the compiled file
+    ReadFromMap, // a value that should be read from the value stack given by the compiler.
     Stop,
     Return,
     Jump,
@@ -91,6 +96,8 @@ pub enum OpCode {
     NotEqualsThis,
     GreaterThanEqThis,
     LessThanEqThis,
+    WrapInOptionThis,
+    UnwrapOptionThis,
 }
 
 /// bits 11..32 are more flexible and store auxiliary information that might be needed by some operations
@@ -115,7 +122,7 @@ impl Debug for Word {
             "raw: {:064b}\n\
         {:32} {:21} {:6} {:4}\n\
         {:032b} {:021b} {:06b} {:04b}\n\
-        {:?} {:?} {}\n",
+        {:?} {:?} {:?}\n",
             self.0 as usize,
             "ptr",
             "aux",
@@ -202,7 +209,7 @@ impl Word {
     where
         H: HeapValue,
     {
-        let mut current = H::get_inner_mut(self);
+        let current = H::get_inner_mut(self);
         *current = value;
         self.0 = (
             (self.0 as u64 & !OPCODE_MASK)

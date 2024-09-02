@@ -53,6 +53,7 @@ pub enum AstNode {
     Option,
     TypeOption,
     Print,
+    OptionNone,
 }
 
 impl From<AstNode> for SyntaxKind {

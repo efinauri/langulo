@@ -126,6 +126,10 @@ impl Emitter {
                     .unwrap_or(Word::new(1 as _, OpCode::Value, ValueTag::Special));
                 push_embeddable!(self, inner, WrapInOption)
             }
+            AstNode::UnwrapOption => {
+                let mut inner = self.emit_node(&node.first_child().unwrap())?;
+                push_embeddable!(self, inner, UnwrapOption)
+            }
 
             AstNode::Add => emit_binary!(self, node, Add),
             AstNode::Subtract => emit_binary!(self, node, Subtract),
@@ -145,6 +149,7 @@ impl Emitter {
             // self.curr_scope -= 1;
             //
             // }
+            AstNode::Grouping => Ok(self.emit_node(&node.first_child().unwrap())?),
             AstNode::Identifier => {
                 let ident_name = node.text().to_string();
                 let index = self.local_variables.iter().rposition(|el| el.name == ident_name);

@@ -129,6 +129,7 @@ impl<'a> Parser<'a> {
             Tok::Not => self.new_prefix_unary_node(AstNode::LogicalNot, &tok)?,
             Tok::Dollar => self.new_prefix_unary_node(AstNode::Print, &tok)?,
             Tok::Pipe => self.parse_scope(AstNode::Lambda, Tok::Pipe)?,
+            Tok::No => self.new_leaf_node(AstNode::Option, content)?,
             Tok::LParen => {
                 self.builder.start_node(AstNode::Grouping.into());
                 self.parse_expr(0, SemicolonPolicy::RequiredAbsent)?;
@@ -279,6 +280,7 @@ impl<'a> Parser<'a> {
             Tok::Or => self.new_binary_node(AstNode::LogicalOr, checkpoint, precedence)?,
             Tok::Else => self.new_binary_node(AstNode::Else, checkpoint, precedence)?,
             Tok::Question => self.new_postfix_unary_node(AstNode::Option, checkpoint)?,
+            Tok::Bang => self.new_postfix_unary_node(AstNode::UnwrapOption, checkpoint)?,
             Tok::At => {
                 // 3@plus(2);
                 self.builder

@@ -44,7 +44,7 @@ impl VM {
             match &current.opcode() {
                 OpCode::Stop => break,
                 OpCode::Value => self.stack.push_back(*current),
-                OpCode::PrintThis => println!("{}", self.stack.back().unwrap()),
+                OpCode::Print => println!("{}", self.stack.back().unwrap()),
 
                 OpCode::Add => run_binary!(self, add_inplace),
                 OpCode::AddThis => self.stack.back_mut().unwrap().add_inplace(current)?,
@@ -100,7 +100,30 @@ impl VM {
                     self.stack.push_back(self.vars[local_idx]);
                 }
 
-                OpCode::WrapInOptionThis => {}
+                OpCode::WrapInOption => {
+                    let value = self.pop_value();
+                    let value_option = if value.tag() == ValueTag::Special { None } else { Some(value) };
+                    let option = Word::option(value_option, OpCode::Value, &mut self.gc);
+                    self.stack.push_back(option);
+                }
+                OpCode::WrapInOptionThis => {
+                    current.set_opcode(OpCode::Value);
+                    let value_option = if current.tag() == ValueTag::Special { None } else { Some(*current)};
+                    self.stack.push_back(Word::option(value_option, OpCode::Value, &mut self.gc));
+                }
+                OpCode::UnwrapOption => {
+                    let value = self.pop_value()
+                        .as_option()
+                        .ok_or(LanguloErr::vm("unwrap option from non-option value"))?;
+                    self.stack.push_back(value);
+                }
+                OpCode::UnwrapOptionThis => {
+                    let current = current
+                        .as_option()
+                        .ok_or(LanguloErr::vm("unwrap option from non-option value"))?;
+                    self.stack.push_back(current);
+                }
+
                 OpCode::ReadFromMap => {
                     let map_idx = current.value() as usize;
                     debug_assert!(current.is_tag_for_heap());

@@ -300,6 +300,12 @@ impl<'a> Parser<'a> {
 
                 self.builder.finish_node();
             }
+            Tok::LBracket => { // table[key], giving an option of the value
+                self.builder.start_node_at(checkpoint, AstNode::TableIndexing.into());
+                self.parse_expr(0, SemicolonPolicy::RequiredAbsent)?;
+                self.assert_tok(Tok::RBracket)?;
+                self.builder.finish_node();
+            }
             _ => {
                 return Err(LanguloErr::semantic(&*format!(
                     "Expected an infix or postfix operator, but found {}",
@@ -545,6 +551,11 @@ mod tests {
             (<Int:3> <TablePair:3> <Int:4>), \
             (<DefaultKey:_> <TablePair:_> <Int:1000>)\
             ])",
+        );
+        // table indexing
+        expect_parser(
+            "tbl[1]",
+            "(<Identifier:tbl> <TableIndexing:tbl1> <Int:1>)",
         )
     }
 

@@ -55,6 +55,7 @@ pub enum AstNode {
     Print,
     OptionNone,
     UnwrapOption,
+    TableIndexing,
 }
 
 impl From<AstNode> for SyntaxKind {

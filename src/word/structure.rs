@@ -98,6 +98,7 @@ pub enum OpCode {
     LessThanEqThis,
     WrapInOptionThis,
     UnwrapOptionThis,
+    IndexGetThis,
 }
 
 /// bits 11..32 are more flexible and store auxiliary information that might be needed by some operations
@@ -164,6 +165,9 @@ impl Word {
                 | (tag as u64 & TAG_MASK)) as *mut u8,
         )
     }
+
+    pub fn NOOPTION() -> Self { Word::new(0 as _, OpCode::Value, ValueTag::Special) }
+    pub fn DEFAULTTABLEARM() -> Self { Word::new(1 as _, OpCode::Value, ValueTag::Special) }
 
     pub fn is_tag_for_heap(&self) -> bool {
         self.tag() > ValueTag::Char

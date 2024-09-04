@@ -123,6 +123,26 @@ impl VM {
                         .ok_or(LanguloErr::vm("unwrap option from non-option value"))?;
                     self.stack.push_back(current);
                 }
+                OpCode::IndexGet => {
+                    let value = self.stack.pop_back().unwrap();
+                    let key = self.pop_value();
+                    let value = value.as_table();
+                    let value  = value
+                        .get(&key)
+                        .or_else(||value.get(&Word::DEFAULTTABLEARM()))
+                        .map(|v|*v);
+                    self.stack.push_back(Word::option(value, OpCode::Value, &mut self.gc));
+                }
+                OpCode::IndexGetThis => {
+                    current.set_opcode(OpCode::Value);
+                    let value = self.stack.pop_back().unwrap();
+                    let value = value.as_table();
+                    let value = value
+                        .get(&current)
+                        .or_else(||value.get(&Word::DEFAULTTABLEARM()))
+                        .map(|v|*v);
+                    self.stack.push_back(Word::option(value, OpCode::Value, &mut self.gc));
+                }
 
                 OpCode::ReadFromMap => {
                     let map_idx = current.value() as usize;
@@ -142,11 +162,13 @@ impl VM {
                             self.stack.push_back(word);
                         }
                         ValueTag::TablePtr => {
-                            let num_of_pairs = current.to_int();
+                            let num_of_pairs = current.value();
                             let mut tbl = Table::new();
                             for _ in 0..num_of_pairs {
                                 let value = self.pop_value();
                                 let key = self.pop_value();
+                                debug_assert!(key.opcode() == OpCode::Value);
+                                debug_assert!(value.opcode() == OpCode::Value);
                                 tbl.insert(key, value);
                             }
                             let word = Word::table(tbl, OpCode::Value, &mut self.gc);

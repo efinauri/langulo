@@ -114,16 +114,29 @@ impl Emitter {
                 Ok(Word::new(0 as _, OpCode::ReadFromMap, ValueTag::StrPtr))
             }
             AstNode::Table => {
-                // todo eval table
-                let table = Table::new();
-                // todo here insert the number of pairs to read
-                Ok(Word::new(0 as _, OpCode::ReadFromMap, ValueTag::TablePtr))
+                for pair in node.children() {
+                    debug_assert_eq!(pair.kind(), AstNode::TablePair);
+                    debug_assert_eq!(pair.children().count(), 2);
+                    let key_word = self.emit_node(&pair.first_child().unwrap())?;
+                    self.bytecode.push(key_word);
+                    let value_word = self.emit_node(&pair.last_child().unwrap())?;
+                    self.bytecode.push(value_word);
+                }
+                Ok(Word::new(node.children().count() as _, OpCode::ReadFromMap, ValueTag::TablePtr))
             }
+            AstNode::TableIndexing => {
+                debug_assert_eq!(node.children().count(), 2);
+                let indexand = self.emit_node(&node.first_child().unwrap())?;
+                self.bytecode.push(indexand);
+                let mut indexer = self.emit_node(&node.last_child().unwrap())?;
+                push_embeddable!(self, indexer, IndexGet);
+            }
+            AstNode::DefaultKey => Ok(Word::DEFAULTTABLEARM()),
             AstNode::Option => {
                 let mut inner = node.first_child()
                     .map(|inner| self.emit_node(&inner))
                     .transpose()?
-                    .unwrap_or(Word::new(1 as _, OpCode::Value, ValueTag::Special));
+                    .unwrap_or(Word::NOOPTION());
                 push_embeddable!(self, inner, WrapInOption)
             }
             AstNode::UnwrapOption => {
@@ -140,15 +153,15 @@ impl Emitter {
             AstNode::LogicalOr => emit_binary!(self, node, LogicalOr),
             AstNode::LogicalXor => emit_binary!(self, node, LogicalXor),
             AstNode::Print => emit_unary!(self, node, Print),
-            // AstNode::Scope => {
-            // self.curr_scope += 1;
-            // for child in node.children() {
-            //     let child_word = self.emit_node(&child)?;
-            //     self.bytecode.push(child_word);
-            // }
-            // self.curr_scope -= 1;
-            //
-            // }
+            AstNode::Scope => {
+                self.curr_scope += 1;
+                for child in node.children() {
+                    let child_word = self.emit_node(&child)?;
+                    self.bytecode.push(child_word);
+                }
+                self.curr_scope -= 1;
+                Ok(Word::int(0, OpCode::Print))
+            }
             AstNode::Grouping => Ok(self.emit_node(&node.first_child().unwrap())?),
             AstNode::Identifier => {
                 let ident_name = node.text().to_string();

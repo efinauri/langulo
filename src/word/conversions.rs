@@ -1,5 +1,5 @@
 use crate::vm::garbage_collector::GarbageCollector;
-use crate::word::heap::{HeapFloat, HeapOption, HeapStr, HeapTable, HeapValue};
+use crate::word::heap::{HeapFloat, HeapOption, HeapStr, HeapTable, HeapValue, Table};
 use crate::word::structure::{OpCode, ValueTag, Word};
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -35,7 +35,7 @@ impl Word {
         ptr
     }
 
-    pub fn table(value: BTreeMap<Word, Word>, opcode: OpCode, gc: &mut GarbageCollector) -> Self {
+    pub fn table(value: Table, opcode: OpCode, gc: &mut GarbageCollector) -> Self {
         let ptr = HeapTable::write(value, opcode);
         gc.trace(ptr);
         ptr
@@ -84,13 +84,13 @@ impl Word {
         &mut self.get_mut::<HeapStr>().0
     }
 
-    pub fn as_table(&self) -> &BTreeMap<Word, Word> {
+    pub fn as_table(&self) -> &Table{
         debug_assert!(self.is_tag_for_heap());
         assert_eq!(self.tag(), ValueTag::TablePtr);
         unsafe { HeapTable::read(&self) }
     }
 
-    pub fn as_table_mut(&mut self) -> &mut BTreeMap<Word, Word> {
+    pub fn as_table_mut(&mut self) -> &mut Table {
         debug_assert!(self.is_tag_for_heap());
         assert_eq!(self.tag(), ValueTag::TablePtr);
         unsafe { &mut self.get_mut::<HeapTable>().0 }
@@ -154,13 +154,20 @@ impl Display for Word {
             ValueTag::StrPtr => write!(f, "\"{}\"", self.as_str()),
             ValueTag::TablePtr => {
                 let tbl = self.as_table();
-                write!(f, "[{}]", tbl.iter().map(|(k, v)| format!("{}: {}", k, v)).collect::<String>())
+                write!(f, "[{}]", tbl.iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", "))
             }
             ValueTag::OptionPtr => write!(f, "{}", self.as_option()
                 .map(|v| format!("{}?", v))
                 .unwrap_or("no".to_string())
             ),
-            ValueTag::Special => write!(f, "{}", if self.to_bool() {"no"} else {"_"})
+            ValueTag::Special => {
+                if self == &Word::NOOPTION() {write!(f, "{}", "no") }
+                else if self == &Word::DEFAULTTABLEARM() { write!(f, "{}", "_") }
+                else {write!(f, "{}{}", "unknown", self.value()) }
+            }
         }
     }
 }

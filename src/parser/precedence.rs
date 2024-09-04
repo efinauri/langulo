@@ -42,6 +42,7 @@ impl Tok {
             | Tok::Question
             | Tok::If => 110,
             Tok::Iter => 120,
+            Tok::LBracket => 130, // indexing
             Tok::At => 130,
             _ => unimplemented!("must explicitly set a precedence for operator {:?} ", self)
         }

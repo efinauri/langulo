@@ -239,6 +239,12 @@ impl Word {
         ) as _;
     }
 
+    pub fn set_value(&mut self, new_value: u32) {
+        self.0 = (
+            (self.0 as u64 &!PTR_MASK) | ((new_value as u64) << PTR_START)
+        ) as _;
+    }
+
     pub fn become_word(&mut self, new_word: Word) {
         self.0 = new_word.0;
     }

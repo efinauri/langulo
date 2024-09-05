@@ -124,9 +124,11 @@ impl PartialEq for Word {
     fn eq(&self, other: &Self) -> bool {
         self.tag() == other.tag()
             && match self.tag() {
-            ValueTag::Int | ValueTag::Bool | ValueTag::Char => self.value() == other.value(),
+            ValueTag::Int | ValueTag::Bool | ValueTag::Char | ValueTag::Special => self.value() == other.value(),
             ValueTag::FloatPtr => self.to_float() == other.to_float(),
             ValueTag::StrPtr => self.as_str() == other.as_str(),
+            ValueTag::TablePtr => self.as_table() == other.as_table(),
+            ValueTag::OptionPtr => self.as_option() == other.as_option(),
             _ => unimplemented!("no partialeq impl for tag {:?}", self.tag()),
         }
     }

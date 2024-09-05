@@ -24,11 +24,11 @@ macro_rules! push_embeddable {
     ($self:expr, $word:expr, $opcode:ident) => { paste::paste! {{
         if $word.is_embeddable() {
             $word.set_opcode(OpCode::[<$opcode This>]);
-            return Ok($word);
+            $word
         }
         else {
             $self.bytecode.push($word);
-            return Ok(Word::int(0, OpCode::$opcode));
+            Word::int(0, OpCode::$opcode)
         }
     }}};
 }
@@ -38,14 +38,14 @@ macro_rules! emit_binary {
         let lhs = $self.emit_node(&$node.first_child().unwrap())?;
         $self.bytecode.push(lhs);
         let mut rhs = $self.emit_node(&$node.last_child().unwrap())?;
-        push_embeddable!($self, rhs, $opcode);
+        Ok(push_embeddable!($self, rhs, $opcode))
     }};
 }
 
 macro_rules! emit_unary {
     ($self:expr, $node:expr, $opcode:ident) => {{
         let mut operand = $self.emit_node(&$node.first_child().unwrap())?;
-        push_embeddable!($self, operand, $opcode);
+        Ok(push_embeddable!($self, operand, $opcode))
     }};
 }
 
@@ -105,6 +105,8 @@ impl Emitter {
         // all the needed operands are already on the stack.
         match node.kind() {
             AstNode::Int => Ok(Word::int(cast_node!(node, i32)?, OpCode::Value)),
+            AstNode::Bool => Ok(Word::bool(cast_node!(node, bool)?, OpCode::Value)),
+            AstNode::Char => Ok(Word::char(cast_node!(node, char)?, OpCode::Value)),
             AstNode::Float => {
                 self.heap_floats.push(cast_node!(node, f64)?);
                 Ok(Word::raw_float((self.heap_floats.len() - 1) as u32))
@@ -129,7 +131,7 @@ impl Emitter {
                 let indexand = self.emit_node(&node.first_child().unwrap())?;
                 self.bytecode.push(indexand);
                 let mut indexer = self.emit_node(&node.last_child().unwrap())?;
-                push_embeddable!(self, indexer, IndexGet);
+                Ok(push_embeddable!(self, indexer, IndexGet))
             }
             AstNode::DefaultKey => Ok(Word::DEFAULTTABLEARM()),
             AstNode::Option => {
@@ -137,11 +139,11 @@ impl Emitter {
                     .map(|inner| self.emit_node(&inner))
                     .transpose()?
                     .unwrap_or(Word::NOOPTION());
-                push_embeddable!(self, inner, WrapInOption)
+                Ok(push_embeddable!(self, inner, WrapInOption))
             }
             AstNode::UnwrapOption => {
                 let mut inner = self.emit_node(&node.first_child().unwrap())?;
-                push_embeddable!(self, inner, UnwrapOption)
+                Ok(push_embeddable!(self, inner, UnwrapOption))
             }
 
             AstNode::Add => emit_binary!(self, node, Add),
@@ -190,6 +192,22 @@ impl Emitter {
                     self.bytecode.push(decl_word);
                     Ok(Word::int(0, OpCode::SetLocal))
                 }
+            }
+            AstNode::If => {
+                let condition = self.emit_node(&node.first_child().unwrap())?;
+                self.bytecode.push(condition);
+
+                let jump_idx = self.bytecode.len();
+                let jump_word = Word::int(0, OpCode::JumpIfFalse);
+                self.bytecode.push(jump_word);
+
+                let len_before_branch = self.bytecode.len();
+                let mut branch = self.emit_node(&node.last_child().unwrap())?;
+                let instructions_to_jump = self.bytecode.len() - len_before_branch + 2;
+
+                self.bytecode.get_mut(jump_idx).unwrap().set_value(instructions_to_jump as u32);
+
+                Ok(push_embeddable!(self, branch, WrapInOption))
             }
             _ => unimplemented!("todo: emit node type {:?}", node),
         }

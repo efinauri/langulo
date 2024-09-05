@@ -87,6 +87,7 @@ impl<'a> Parser<'a> {
         self.builder.start_node(AstNode::Root.into());
         while self.lexer.peek()?.is_some() {
             self.parse_expr(0, SemicolonPolicy::RequiredPresent)?;
+            println!("parsed something, next up is {:?}", self.lexer.peek()?);
         }
         self.builder.finish_node();
         Ok(())
@@ -140,7 +141,7 @@ impl<'a> Parser<'a> {
             Tok::If => {
                 self.builder.start_node(AstNode::If.into());
                 self.parse_expr(0, SemicolonPolicy::RequiredAbsent)?; // condition
-                self.parse_expr(tok.precedence(), SemicolonPolicy::Optional)?; // body
+                self.parse_expr(tok.precedence(), SemicolonPolicy::RequiredAbsent)?; // body
                 self.builder.finish_node();
             }
             Tok::Var => {
@@ -424,7 +425,7 @@ impl<'a> Parser<'a> {
             | (SemicolonPolicy::RequiredAbsent, false)
             | (SemicolonPolicy::Optional, false) => Ok(()),
             (SemicolonPolicy::RequiredPresent, false) => {
-                Err(LanguloErr::semantic("Expected end of expression"))
+                Err(LanguloErr::semantic("Expected a semicolon but did not get it"))
             }
             (SemicolonPolicy::RequiredPresent, true) | (SemicolonPolicy::Optional, true) => {
                 next!(self);
@@ -610,5 +611,12 @@ mod tests {
             "var x: int? = 3?;",
             "((<TypeOption:int> <TypeInt:int>) <VarDecl:x> (<Option:3> <Int:3>))",
         )
+    }
+
+    #[test]
+    fn bug_1() {
+        expect_parser("if false {2}; 3;",
+                      "(<Bool:false> <If:false2> (<Scope:2> <Int:2>))\n\
+        <Int:3>")
     }
 }

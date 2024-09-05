@@ -35,7 +35,7 @@ impl VM {
 
     pub fn run(&mut self) -> Result<(), LanguloErr> {
         loop {
-            debug_assert!(self.ip < self.bytecode.len());
+            debug_assert!(self.ip <= self.bytecode.len(), "{}", format!("{} > {}", self.ip, self.bytecode.len()));
             let current = &mut self.bytecode[self.ip];
             #[feature(debug)] {
                 println!("running bytecode [{}]:\n{:?}", self.ip, current);
@@ -124,7 +124,7 @@ impl VM {
                     self.stack.push_back(current);
                 }
                 OpCode::IndexGet => {
-                    let value = self.stack.pop_back().unwrap();
+                    let value = self.pop_value();
                     let key = self.pop_value();
                     let value = value.as_table();
                     let value  = value
@@ -142,6 +142,14 @@ impl VM {
                         .or_else(||value.get(&Word::DEFAULTTABLEARM()))
                         .map(|v|*v);
                     self.stack.push_back(Word::option(value, OpCode::Value, &mut self.gc));
+                }
+                OpCode::JumpIfFalse => {
+                    let condition = self.stack.pop_back().unwrap();
+                    debug_assert_eq!(condition.tag(), ValueTag::Bool);
+                    if !condition.to_bool() {
+                        self.ip += current.value() as usize;
+                        self.stack.push_back(Word::NOOPTION());
+                    }
                 }
 
                 OpCode::ReadFromMap => {
@@ -185,6 +193,7 @@ impl VM {
     }
 
     pub fn finalize(mut self) -> Word {
+        debug_assert!(self.stack.len() > 0);
         // no guarantee that this is the last element in the stack. for example this is a valid program: 3; 2; 1;
         self.pop_value()
     }

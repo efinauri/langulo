@@ -5,7 +5,7 @@ mod end_to_end_tests {
     use crate::vm::VM;
     use crate::word::structure::{OpCode, Word};
 
-    fn expect_vm_output(input: &str, expected_output: Word) {
+    fn expect_vm_output(input: &str, expected_output: &str) {
         let mut emitter = Emitter::new(input).unwrap();
         emitter.emit().unwrap();
         let mut buf = vec![];
@@ -13,11 +13,18 @@ mod end_to_end_tests {
         let mut cursor = io::Cursor::new(buf);
         let mut vm = VM::from_compiled_stream(&mut cursor).expect("failed to spin vm up from stream");
         vm.run().expect("error while running");
-        assert_eq!(expected_output, vm.finalize());
+        assert_eq!(expected_output, vm.finalize().to_string());
     }
 
     #[test]
     fn test_addition() {
-        expect_vm_output("3+2;", Word::int(5, OpCode::Value));
+        expect_vm_output("3+2;", "5");
+    }
+
+    #[test]
+    fn test_if() {
+        expect_vm_output("if true {2};", "2?");
+        expect_vm_output("if false {2};", "no");
+        expect_vm_output("if false {2}; 3;", "3");
     }
 }

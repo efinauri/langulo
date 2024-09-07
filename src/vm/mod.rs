@@ -151,6 +151,15 @@ impl VM {
                         self.stack.push_back(Word::NOOPTION());
                     }
                 }
+                OpCode::JumpIfNo => {
+                    let option = self.stack.pop_back().unwrap();
+                    debug_assert_eq!(option.tag(), ValueTag::OptionPtr);
+                    let option = option.as_option();
+                    if option.is_some() {
+                        self.ip += current.value() as usize;
+                        self.stack.push_back(option.unwrap());
+                    }
+                }
 
                 OpCode::ReadFromMap => {
                     let map_idx = current.value() as usize;

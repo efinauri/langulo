@@ -47,7 +47,7 @@ pub enum OpCode {
     ReadFromMap, // a value that should be read from the value stack given by the compiler.
     Stop,
     Return,
-    Jump,
+    JumpIfNo,
     JumpIfFalse,
     Call,
     CallBuiltin,

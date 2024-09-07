@@ -27,4 +27,10 @@ mod end_to_end_tests {
         expect_vm_output("if false {2};", "no");
         expect_vm_output("if false {2}; 3;", "3");
     }
+
+    #[test]
+    fn test_else() {
+        expect_vm_output("no else {3};", "3");
+        expect_vm_output("2? else {3};", "2");
+    }
 }

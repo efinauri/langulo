@@ -209,6 +209,24 @@ impl Emitter {
 
                 Ok(push_embeddable!(self, branch, WrapInOption))
             }
+            AstNode::Else => {
+                let option = self.emit_node(&node.first_child().unwrap())?;
+                self.bytecode.push(option);
+
+                let jump_idx = self.bytecode.len();
+                let jump_word = Word::int(0, OpCode::JumpIfNo);
+                self.bytecode.push(jump_word);
+
+                let len_before_branch = self.bytecode.len();
+                let branch = self.emit_node(&node.last_child().unwrap())?;
+                // +1 instead of +2 because we don't "post-process" the branch like we did in "if"
+                let instructions_to_jump = self.bytecode.len() - len_before_branch + 1;
+
+                self.bytecode.get_mut(jump_idx).unwrap().set_value(instructions_to_jump as u32);
+                Ok(branch)
+            }
+
+
             _ => unimplemented!("todo: emit node type {:?}", node),
         }
     }

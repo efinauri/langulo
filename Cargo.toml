@@ -1,0 +1,10 @@
+[package]
+name = "languria2"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# lexer
+logos = "0.16.0"
+# parser
+rowan = "0.16.1"

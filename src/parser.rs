@@ -3,7 +3,7 @@ use crate::errors::LanguriaResult;
 use crate::lexer::Tok;
 use crate::parser::AstNode::Root;
 use logos::Lexer;
-use rowan::Checkpoint;
+use rowan::{Checkpoint, SyntaxNode};
 use std::iter::Peekable;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -31,7 +31,8 @@ impl From<AstNode> for rowan::SyntaxKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum Languria {}
+pub enum Languria {}
+pub type LanguriaSyntaxNode = SyntaxNode<Languria>;
 
 impl rowan::Language for Languria {
     type Kind = AstNode;
@@ -90,8 +91,15 @@ pub struct Parser<'src> {
     ast_builder: rowan::GreenNodeBuilder<'src>, // could be static?
 }
 
+pub fn parse(source: &str) -> LanguriaResult<LanguriaSyntaxNode> {
+    let mut parser = Parser::new(source);
+    parser.parse_root()?;
+    let ast = parser.ast_builder.finish();
+    Ok(SyntaxNode::new_root(ast))
+}
+
 impl<'src> Parser<'src> {
-    pub fn new(source: &'src str) -> Self {
+    fn new(source: &'src str) -> Self {
         Self {
             source,
             lexer: Lexer::new(source).peekable(),
@@ -99,7 +107,7 @@ impl<'src> Parser<'src> {
         }
     }
 
-    pub fn parse(&mut self) -> LanguriaResult<()> {
+    fn parse_root(&mut self) -> LanguriaResult<()> {
         self.ast_builder.start_node(Root.into());
         while peek!(self).is_some() {
             self.parse_expr(0)?;
@@ -177,19 +185,22 @@ impl<'src> Parser<'src> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rowan::SyntaxNode;
+    use crate::parser::AstNode::*;
 
     fn print_ast(source: &str) {
-        let mut parser = Parser::new(source);
-        parser.parse().unwrap();
-        let ast = parser.ast_builder.finish();
-        let root: SyntaxNode<Languria> = SyntaxNode::new_root(ast);
+        let root = parse(source).unwrap();
         root.descendants().for_each(|node| println!("{:?}", node));
+    }
+
+    fn expect_ast(source: &str, expected_nodes_tree_lexicographic_order: &[AstNode]) {
+        let root = parse(source).unwrap();
+        let actual_nodes: Vec<_> = root.descendants().map(|node| node.kind()).collect();
+        assert_eq!(actual_nodes, expected_nodes_tree_lexicographic_order);
     }
 
     #[test]
     fn test_print_ast() {
         print_ast("1 + 2 * 3");
-        // todo expect ast structure
+        expect_ast("1 + 2 * 3", &[Root, Add, Num, Multiply, Num, Num]);
     }
 }

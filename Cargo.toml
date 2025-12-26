@@ -8,3 +8,5 @@ edition = "2024"
 logos = "0.16.0"
 # parser
 rowan = "0.16.1"
+# attaching to another (MIT) programming language's compiler
+koto = { git = "https://github.com/koto-lang/koto.git" }

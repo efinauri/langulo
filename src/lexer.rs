@@ -6,7 +6,7 @@ pub enum Tok<'a> {
     #[regex(r"[0-9_]+(\.[0-9_]+)?")]
     Num(&'a str),
     #[regex(r"[ \t\n\r]+")]
-    Whitespace,
+    Whitespace(&'a str),
     // operations
     #[regex(r"\+")]
     Plus,
@@ -28,7 +28,7 @@ impl Tok<'_> {
     pub fn info(&self) -> String {
         match self {
             Tok::Num(value) => value,
-            Tok::Whitespace => "whitespace",
+            Tok::Whitespace(_) => "whitespace",
             Tok::Plus => "+",
             Tok::Minus => "-",
             Tok::Star => "*",
@@ -70,7 +70,11 @@ mod tests {
 
     #[test]
     fn test_arithmetic() {
-        expect_tokens("1 + 2.3    ", &[Num("1"), Whitespace, Plus, Whitespace, Num("2.3"), Whitespace, __Test_Eof]);
+        expect_tokens("1 + 2.3    ", &[
+            Num("1"), Whitespace(" "),
+            Plus, Whitespace(" "),
+            Num("2.3"), Whitespace(" ".repeat(4).as_str()),
+            __Test_Eof]);
         expect_tokens("1_000_000", &[Num("1_000_000"), __Test_Eof]);
         expect_tokens(
             "+-*/%^",

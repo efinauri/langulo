@@ -2,7 +2,7 @@ use crate::errors::LanguriaError;
 use crate::errors::LanguriaResult;
 use crate::lexer::Tok;
 use crate::parser::AstNode::Root;
-use logos::Lexer;
+use logos::{Lexer, Source};
 use rowan::{Checkpoint, SyntaxNode};
 use std::iter::Peekable;
 
@@ -49,7 +49,7 @@ impl rowan::Language for Languria {
 impl Tok<'_> {
     fn precedence(&self) -> u8 {
         match self {
-            Tok::Num(_) | Tok::Whitespace | Tok::__Test_Eof => 0,
+            Tok::Num(_) | Tok::Whitespace(_) | Tok::__Test_Eof => 0,
 
             Tok::Plus | Tok::Minus => 0b_0001_0000,
             Tok::Star | Tok::Slash | Tok::Percent => 0b_0010_0000,
@@ -58,37 +58,27 @@ impl Tok<'_> {
     }
 }
 
-macro_rules! next {
-    ($self:expr) => {{
-        $self.skip_whitespace()?;
-        let result = match $self.lexer.next() {
-            Some(Ok(tok)) => Ok(tok),
-            Some(Err(())) => Err(LanguriaError::InternalError(
-                "No lexing rule matches the input".to_string(),
-            )),
-            None => Err(LanguriaError::SemanticUnexpectedEOF),
-        }?;
-        $self.skip_whitespace()?;
-        result
-    }};
-}
-
-macro_rules! peek {
-    ($self:expr) => {{
-        match $self.lexer.peek() {
-            Some(Ok(tok)) => Ok(Some(*tok)),
-            Some(Err(())) => Err(LanguriaError::InternalError(
-                "No lexing rule matches the input".to_string(),
-            )),
-            None => Ok(None),
-        }?
-    }};
+impl Tok<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Tok::Num(slice)
+            | Tok::Whitespace(slice) => slice.len(),
+            Tok::Plus
+            | Tok::Minus
+            | Tok::Star
+            | Tok::Slash
+            | Tok::Percent
+            | Tok::Caret => 1,
+            Tok::__Test_Eof => 0
+        }
+    }
 }
 
 pub struct Parser<'src> {
     source: &'src str,
     lexer: Peekable<Lexer<'src, Tok<'src>>>,
-    ast_builder: rowan::GreenNodeBuilder<'src>, // could be static?
+    ast_builder: rowan::GreenNodeBuilder<'src>,
+    current_offset: usize,
 }
 
 pub fn parse(source: &str) -> LanguriaResult<LanguriaSyntaxNode> {
@@ -104,12 +94,34 @@ impl<'src> Parser<'src> {
             source,
             lexer: Lexer::new(source).peekable(),
             ast_builder: Default::default(),
+            current_offset: 0,
+        }
+    }
+
+    fn next_token(&mut self) -> LanguriaResult<Tok<'src>> {
+        self.skip_whitespace()?;
+        match self.lexer.next() {
+            Some(Ok(tok)) => {
+                self.current_offset += tok.len();
+                Ok(tok)
+            }
+            Some(Err(())) => Err(LanguriaError::lexer_error(self.source, self.current_offset)),
+            None => Err(LanguriaError::unexpected_eof(self.source)),
+        }
+    }
+
+    fn peek_token(&mut self) -> LanguriaResult<Option<Tok<'src>>> {
+        self.skip_whitespace()?;
+        match self.lexer.peek() {
+            Some(Ok(tok)) => Ok(Some(*tok)),
+            Some(Err(())) => Err(LanguriaError::lexer_error(self.source, self.current_offset)),
+            None => Ok(None),
         }
     }
 
     fn parse_root(&mut self) -> LanguriaResult<()> {
         self.ast_builder.start_node(Root.into());
-        while peek!(self).is_some() {
+        while self.peek_token()?.is_some() {
             self.parse_expr(0)?;
         }
         self.ast_builder.finish_node();
@@ -121,7 +133,7 @@ impl<'src> Parser<'src> {
         self.parse_prefix()?;
 
         loop {
-            let next_precedence = match peek!(self) {
+            let next_precedence = match self.peek_token()? {
                 Some(tok) => tok.precedence(),
                 None => break,
             };
@@ -134,10 +146,16 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_prefix(&mut self) -> LanguriaResult<()> {
-        let tok = next!(self);
+        let tok = self.next_token()?;
         match tok {
             Tok::Num(value) => self.add_leaf_node(AstNode::Num, value),
-            _ => return Err(LanguriaError::UnexpectedToken(tok.info())),
+            _ => {
+                return Err(LanguriaError::unexpected_token(
+                    self.source,
+                    &tok.info(),
+                    self.current_offset.saturating_sub(1),
+                ));
+            }
         }
         Ok(())
     }
@@ -149,7 +167,7 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_infix(&mut self, checkpoint: Checkpoint, precedence: u8) -> LanguriaResult<()> {
-        let tok = next!(self);
+        let tok = self.next_token()?;
         match tok {
             Tok::Plus => self.add_binary_node(AstNode::Add, checkpoint, precedence)?,
             Tok::Minus => self.add_binary_node(AstNode::Subtract, checkpoint, precedence)?,
@@ -157,7 +175,13 @@ impl<'src> Parser<'src> {
             Tok::Slash => self.add_binary_node(AstNode::Divide, checkpoint, precedence)?,
             Tok::Caret => self.add_binary_node(AstNode::Power, checkpoint, precedence)?,
             Tok::Percent => self.add_binary_node(AstNode::Modulo, checkpoint, precedence)?,
-            _ => return Err(LanguriaError::UnexpectedToken(tok.info())),
+            _ => {
+                return Err(LanguriaError::unexpected_token(
+                    self.source,
+                    &tok.info(),
+                    self.current_offset.saturating_sub(1),
+                ));
+            }
         }
         Ok(())
     }
@@ -175,7 +199,8 @@ impl<'src> Parser<'src> {
     }
 
     fn skip_whitespace(&mut self) -> LanguriaResult<()> {
-        while let Some(Tok::Whitespace) = peek!(self) {
+        while let Some(Ok(Tok::Whitespace(slice))) = self.lexer.peek() {
+            self.current_offset += slice.len();
             self.lexer.next();
         }
         Ok(())
@@ -202,5 +227,20 @@ mod tests {
     fn test_print_ast() {
         print_ast("1 + 2 * 3");
         expect_ast("1 + 2 * 3", &[Root, Add, Num, Multiply, Num, Num]);
+    }
+
+    #[test]
+    fn test_power_precedence() {
+        expect_ast("2 ^ 3 ^ 2", &[Root, Power, Power, Num, Num, Num]);
+    }
+
+    #[test]
+    fn test_complex_expression() {
+        expect_ast(
+            "1 + 2 * 3 - 4 / 2",
+            &[
+                Root, Subtract, Add, Num, Multiply, Num, Num, Divide, Num, Num,
+            ],
+        );
     }
 }

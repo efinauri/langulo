@@ -39,7 +39,7 @@ pub fn eval_python(code: &str) -> LanguriaResult<EvalResult> {
         let globals = PYTHON_GLOBALS
             .get()
             .ok_or_else(|| LanguriaError::PythonError {
-                message: "Python not initialized".to_string(),
+                message: "Python not initialized".into(),
             })?
             .as_ref(py);
 
@@ -48,13 +48,13 @@ pub fn eval_python(code: &str) -> LanguriaResult<EvalResult> {
                 let display = result
                     .repr()
                     .map(|r| r.to_string())
-                    .unwrap_or_else(|_| "<unable to display>".to_string());
+                    .unwrap_or_else(|_| "<unable to display>".into());
 
                 let py_type = result
                     .get_type()
                     .name()
-                    .map(|n| n.to_string())
-                    .unwrap_or_else(|_| "unknown".to_string());
+                    .map(|n| n.into())
+                    .unwrap_or_else(|_| "unknown".into());
 
                 let _ = globals.set_item("_", result);
 
@@ -72,7 +72,7 @@ pub fn exec_python(code: &str) -> LanguriaResult<()> {
         let globals = PYTHON_GLOBALS
             .get()
             .ok_or_else(|| LanguriaError::PythonError {
-                message: "Python not initialized".to_string(),
+                message: "Python not initialized".into(),
             })?
             .as_ref(py);
 
@@ -88,7 +88,7 @@ pub fn get_variable(name: &str) -> LanguriaResult<Option<String>> {
         let globals = PYTHON_GLOBALS
             .get()
             .ok_or_else(|| LanguriaError::PythonError {
-                message: "Python not initialized".to_string(),
+                message: "Python not initialized".into(),
             })?
             .as_ref(py);
 
@@ -97,7 +97,7 @@ pub fn get_variable(name: &str) -> LanguriaResult<Option<String>> {
                 value
                     .repr()
                     .map(|r| r.to_string())
-                    .unwrap_or_else(|_| "<unable to display>".to_string()),
+                    .unwrap_or_else(|_| "<unable to display>".into()),
             )),
             Ok(None) => Ok(None),
             Err(e) => Err(LanguriaError::PythonError {

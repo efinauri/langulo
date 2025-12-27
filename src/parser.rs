@@ -1,3 +1,4 @@
+use std::char::MAX;
 use crate::errors::LanguriaError;
 use crate::errors::LanguriaResult;
 use crate::lexer::Tok;
@@ -9,8 +10,10 @@ use std::iter::Peekable;
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
 #[repr(u16)]
 pub enum AstNode {
+    Root = u16::MAX,
     // values
-    Num,
+    Num = 0,
+    Grouping,
     //unary
     Add,
     Subtract,
@@ -18,8 +21,6 @@ pub enum AstNode {
     Divide,
     Modulo,
     Power,
-    // top level, keep for last in this list
-    Root,
 }
 
 // plumbing for rowan
@@ -53,6 +54,8 @@ impl Tok<'_> {
             | Tok::Whitespace(_)
             | Tok::BlockComment(_)
             | Tok::LineComment(_)
+            | Tok::LParen
+            | Tok::RParen
             | Tok::__Test_Eof => 0,
 
             Tok::Plus | Tok::Minus => 0b_0001_0000,
@@ -74,8 +77,10 @@ impl Tok<'_> {
             | Tok::Star
             | Tok::Slash
             | Tok::Percent
-            | Tok::Caret => 1,
-            Tok::__Test_Eof => 0
+            | Tok::Caret
+            | Tok::RParen
+            | Tok::LParen => 1,
+            Tok::__Test_Eof => 0,
         }
     }
 }
@@ -111,8 +116,14 @@ impl<'src> Parser<'src> {
                 self.current_offset += tok.len();
                 Ok(tok)
             }
-            Some(Err(())) => Err(LanguriaError::lexer_error(self.source, self.current_offset)),
-            None => Err(LanguriaError::unexpected_eof(self.source)),
+            Some(Err(())) => Err(LanguriaError::LexerError {
+                src: self.source.into(),
+                span: (self.current_offset, 1).into(),
+            }),
+            None => Err(LanguriaError::UnexpectedEOF {
+                src: self.source.into(),
+                span: (self.current_offset, 1).into(),
+            }),
         }
     }
 
@@ -120,7 +131,10 @@ impl<'src> Parser<'src> {
         self.skip_trivia()?;
         match self.lexer.peek() {
             Some(Ok(tok)) => Ok(Some(*tok)),
-            Some(Err(())) => Err(LanguriaError::lexer_error(self.source, self.current_offset)),
+            Some(Err(())) => Err(LanguriaError::LexerError {
+                src: self.source.into(),
+                span: (self.current_offset, 1).into(),
+            }),
             None => Ok(None),
         }
     }
@@ -155,12 +169,18 @@ impl<'src> Parser<'src> {
         let tok = self.next_token()?;
         match tok {
             Tok::Num(value) => self.add_leaf_node(AstNode::Num, value),
+            Tok::LParen => {
+                self.ast_builder.start_node(AstNode::Grouping.into());
+                self.parse_expr(0)?;
+                self.require_specific_tok(Tok::RParen)?;
+                self.ast_builder.finish_node();
+            }
             _ => {
-                return Err(LanguriaError::unexpected_token(
-                    self.source,
-                    &tok.info(),
-                    self.current_offset.saturating_sub(1),
-                ));
+                return Err(LanguriaError::UnexpectedToken {
+                    token: tok.info(),
+                    src: self.source.into(),
+                    span: (self.current_offset, tok.len()).into(),
+                });
             }
         }
         Ok(())
@@ -182,11 +202,11 @@ impl<'src> Parser<'src> {
             Tok::Caret => self.add_binary_node(AstNode::Power, checkpoint, precedence)?,
             Tok::Percent => self.add_binary_node(AstNode::Modulo, checkpoint, precedence)?,
             _ => {
-                return Err(LanguriaError::unexpected_token(
-                    self.source,
-                    &tok.info(),
-                    self.current_offset.saturating_sub(1),
-                ));
+                return Err(LanguriaError::UnexpectedToken {
+                    token: tok.info(),
+                    src: self.source.into(),
+                    span: (self.current_offset, tok.len()).into(),
+                });
             }
         }
         Ok(())
@@ -207,16 +227,36 @@ impl<'src> Parser<'src> {
     fn skip_trivia(&mut self) -> LanguriaResult<()> {
         while let Some(Ok(tok)) = self.lexer.peek() {
             match tok {
-                Tok::Whitespace(slice)
-                | Tok::BlockComment(slice)
-                | Tok::LineComment(slice) => {
+                Tok::Whitespace(slice) | Tok::BlockComment(slice) | Tok::LineComment(slice) => {
                     self.current_offset += slice.len();
                     self.lexer.next();
                 }
-                _ => break
+                _ => break,
             }
         }
         Ok(())
+    }
+
+    fn require_specific_tok(&mut self, required_tok: Tok) -> LanguriaResult<()> {
+        if let Some(found_tok) = self.peek_token()? {
+            return if found_tok == required_tok {
+                let _ = self.next_token()?;
+                Ok(())
+            } else {
+                Err(LanguriaError::ExpectedTokenAbsent {
+                    expected: required_tok.info(),
+                    found: found_tok.info(),
+                    src: self.source.into(),
+                    span: (self.current_offset, found_tok.len()).into(),
+                })
+            };
+        }
+        Err(LanguriaError::ExpectedTokenAbsent {
+            expected: required_tok.info(),
+            found: "end of file".into(),
+            src: self.source.into(),
+            span: (self.current_offset, 1).into(),
+        })
     }
 }
 
@@ -247,11 +287,21 @@ mod tests {
                 Root, Subtract, Add, Num, Multiply, Num, Num, Divide, Num, Num,
             ],
         );
-
     }
 
     #[test]
     fn test_comments() {
-        expect_ast("1 //- ignored -// + 2 * 3 //also ignored", &[Root, Add, Num, Multiply, Num, Num]);
+        expect_ast(
+            "1 //- ignored -// + 2 * 3 //also ignored",
+            &[Root, Add, Num, Multiply, Num, Num],
+        );
+    }
+
+    #[test]
+    fn test_grouping() {
+        expect_ast(
+            "2 * (3 - 1)",
+            &[Root, Multiply, Num, Grouping, Subtract, Num, Num]
+        )
     }
 }

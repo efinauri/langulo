@@ -42,6 +42,15 @@ impl Transpiler {
             AstNode::Divide => self.visit_binary(node, "/")?,
             AstNode::Modulo => self.visit_binary(node, "%")?,
             AstNode::Power => self.visit_binary(node, "**")?,
+            AstNode::Grouping => {
+                let child = node.first_child()
+                    .ok_or(LanguriaError::TranspileError {
+                        message: "Internal error: Grouping node has no children".to_string(),
+                    })?;
+                self.output.push('(');
+                self.visit(&child)?;
+                self.output.push(')');
+            },
         }
         Ok(())
     }
@@ -110,5 +119,9 @@ mod tests {
             transpile_source("1 + 2 * 3 ^ 4"),
             "(1+(2*(3**4)))"
         );
+    }
+    #[test]
+    fn test_grouping() {
+        assert_eq!(transpile_source("(2-3)*(4-5)"), "(((2-3))*((4-5)))");
     }
 }

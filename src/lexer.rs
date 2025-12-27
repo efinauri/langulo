@@ -2,9 +2,10 @@ use logos::Logos;
 
 #[derive(Logos, Debug, PartialEq, Copy, Clone)]
 pub enum Tok<'a> {
-    // only numbers and numeric operations for now
+    //values
     #[regex(r"[0-9_]+(\.[0-9_]+)?")]
     Num(&'a str),
+    // trivia
     #[regex(r"[ \t\n\r]+")]
     Whitespace(&'a str),
     #[regex(r"//([^-\n][^\n]*)?", priority = 2)] // needs to be matched before division
@@ -24,6 +25,11 @@ pub enum Tok<'a> {
     Percent,
     #[regex(r"\^")]
     Caret,
+    // grouping
+    #[regex(r"\(")]
+    LParen,
+    #[regex(r"\)")]
+    RParen,
     #[allow(dead_code, non_camel_case_types)]
     __Test_Eof,
 }
@@ -41,9 +47,11 @@ impl Tok<'_> {
             Tok::Slash => "/",
             Tok::Percent => "%",
             Tok::Caret => "^",
+            Tok::LParen => "(",
+            Tok::RParen => ")",
             Tok::__Test_Eof => "EOF",
         }
-        .to_string()
+        .into()
     }
 }
 
@@ -102,5 +110,10 @@ lines-//5
                 Num("4"), BlockComment("//-multiline\non multiple\nlines-//"), Num("5"), Whitespace("\n"),
                 Num("6"), __Test_Eof]
         )
+    }
+
+    #[test]
+    fn test_grouping() {
+        expect_tokens("()", &[LParen, RParen]);
     }
 }

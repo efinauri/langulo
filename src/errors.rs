@@ -9,9 +9,7 @@ pub enum LanguriaError {
         code(languria::internal),
         help("This is a bug in Languria. Please report it!")
     )]
-    InternalError {
-        message: String,
-    },
+    InternalError { message: String },
 
     #[error("Unexpected end of input")]
     #[diagnostic(
@@ -51,13 +49,12 @@ pub enum LanguriaError {
         span: SourceSpan,
     },
 
-    #[error("Lexer error at position {position}")]
+    #[error("Lexer error")]
     #[diagnostic(
         code(languria::lexer::no_match),
         help("No lexer rule matches this input")
     )]
     LexerError {
-        position: usize,
         #[source_code]
         src: String,
         #[label("unrecognized character")]
@@ -69,58 +66,25 @@ pub enum LanguriaError {
         code(languria::runtime::python),
         help("The generated Python code failed to execute")
     )]
-    PythonError {
-        message: String,
-    },
+    PythonError { message: String },
 
     #[error("Transpilation error: {message}")]
     #[diagnostic(code(languria::transpile::error))]
-    TranspileError {
-        message: String,
+    TranspileError { message: String },
+
+    #[error("Expected '{expected}' but found '{found}'")]
+    #[diagnostic(
+        code(languria::syntax::unexpected_token),
+        help("Expected a number or operator here")
+    )]
+    ExpectedTokenAbsent {
+        expected: String,
+        found: String,
+        #[source_code]
+        src: String,
+        #[label("unexpected token")]
+        span: SourceSpan,
     },
 }
 
-impl LanguriaError {
-    pub fn unexpected_eof(src: &str) -> Self {
-        let len = src.len();
-        Self::UnexpectedEOF {
-            src: src.to_string(),
-            span: (len.saturating_sub(1), 1).into(),
-        }
-    }
-
-    pub fn unexpected_token(src: &str, token: &str, offset: usize) -> Self {
-        Self::UnexpectedToken {
-            token: token.to_string(),
-            src: src.to_string(),
-            span: (offset, token.len().max(1)).into(),
-        }
-    }
-
-    pub fn lexer_error(src: &str, position: usize) -> Self {
-        Self::LexerError {
-            position,
-            src: src.to_string(),
-            span: (position, 1).into(),
-        }
-    }
-
-    pub fn invalid_number(src: &str, value: &str, offset: usize) -> Self {
-        Self::InvalidNumber {
-            value: value.to_string(),
-            src: src.to_string(),
-            span: (offset, value.len()).into(),
-        }
-    }
-}
-
 pub type LanguriaResult<T> = Result<T, LanguriaError>;
-
-/// For backward compatibility during migration
-impl From<&str> for LanguriaError {
-    fn from(msg: &str) -> Self {
-        LanguriaError::InternalError {
-            message: msg.to_string(),
-        }
-    }
-}

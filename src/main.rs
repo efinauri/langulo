@@ -1,8 +1,8 @@
 use clap::Parser;
-use languria2::repl::Repl;
+use langulo::repl::Repl;
 
 #[derive(Parser)]
-#[command(name = "languria")]
+#[command(name = "langulo")]
 #[command(about = "a programming language")]
 struct Cli {
     #[arg(short, long)]

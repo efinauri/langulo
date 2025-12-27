@@ -1,4 +1,4 @@
-use crate::errors::{LanguriaError, LanguriaResult};
+use crate::errors::{LanguloError, LanguloResult};
 use crate::parser::parse;
 use crate::runtime::{eval_python, init_python};
 use crate::transpile::transpile;
@@ -20,12 +20,12 @@ impl Repl {
         }
     }
 
-    pub fn run(&mut self) -> LanguriaResult<()> {
+    pub fn run(&mut self) -> LanguloResult<()> {
         init_python()?;
 
         println!(
             "{} {}",
-            "Languria REPL".magenta().bold(),
+            "Langulo REPL".magenta().bold(),
             "v0.1.0".dimmed() // todo read version from cargo
         );
         println!("{}", "Type expressions to evaluate. Ctrl+D to exit.".dimmed());
@@ -34,7 +34,7 @@ impl Repl {
         }
         println!();
 
-        self.repl_loop().map_err(|e| LanguriaError::InternalError {
+        self.repl_loop().map_err(|e| LanguloError::InternalError {
             message: format!("REPL error: {}", e),
         })
     }
@@ -44,7 +44,7 @@ impl Repl {
 
         let history_path = std::env::var("HOME")
             .ok()
-            .map(|h| std::path::PathBuf::from(h).join(".languria_history"));
+            .map(|h| std::path::PathBuf::from(h).join(".langulo_history"));
 
         if let Some(ref path) = history_path {
             let _ = rl.load_history(path);
@@ -120,7 +120,7 @@ impl Repl {
         }
     }
 
-    fn print_error(&self, error: &LanguriaError) {
+    fn print_error(&self, error: &LanguloError) {
         let mut buf = String::new();
         if self.report_handler.render_report(&mut buf, error).is_ok() {
             eprint!("{}", buf);

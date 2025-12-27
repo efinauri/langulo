@@ -1,9 +1,9 @@
-//! Python runtime for executing transpiled Languria code
+//! Python runtime for executing transpiled Langulo code
 //!
 //! Uses PyO3 to embed Python and maintain a persistent namespace
 //! for variable storage across REPL iterations.
 
-use crate::errors::{LanguriaError, LanguriaResult};
+use crate::errors::{LanguloError, LanguloResult};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::sync::OnceLock;
@@ -16,16 +16,16 @@ pub struct EvalResult {
     pub py_type: String,
 }
 
-pub fn init_python() -> LanguriaResult<()> {
+pub fn init_python() -> LanguloResult<()> {
     Python::with_gil(|py| {
         let globals = PyDict::new(py);
 
-        let math = py.import("math").map_err(|e| LanguriaError::PythonError {
+        let math = py.import("math").map_err(|e| LanguloError::PythonError {
             message: format!("Failed to import math: {}", e),
         })?;
         globals
             .set_item("math", math)
-            .map_err(|e| LanguriaError::PythonError {
+            .map_err(|e| LanguloError::PythonError {
                 message: format!("Failed to set math in globals: {}", e),
             })?;
 
@@ -34,11 +34,11 @@ pub fn init_python() -> LanguriaResult<()> {
     })
 }
 
-pub fn eval_python(code: &str) -> LanguriaResult<EvalResult> {
+pub fn eval_python(code: &str) -> LanguloResult<EvalResult> {
     Python::with_gil(|py| {
         let globals = PYTHON_GLOBALS
             .get()
-            .ok_or_else(|| LanguriaError::PythonError {
+            .ok_or_else(|| LanguloError::PythonError {
                 message: "Python not initialized".into(),
             })?
             .as_ref(py);
@@ -60,34 +60,34 @@ pub fn eval_python(code: &str) -> LanguriaResult<EvalResult> {
 
                 Ok(EvalResult { display, py_type })
             }
-            Err(e) => Err(LanguriaError::PythonError {
+            Err(e) => Err(LanguloError::PythonError {
                 message: format!("{}", e),
             }),
         }
     })
 }
 
-pub fn exec_python(code: &str) -> LanguriaResult<()> {
+pub fn exec_python(code: &str) -> LanguloResult<()> {
     Python::with_gil(|py| {
         let globals = PYTHON_GLOBALS
             .get()
-            .ok_or_else(|| LanguriaError::PythonError {
+            .ok_or_else(|| LanguloError::PythonError {
                 message: "Python not initialized".into(),
             })?
             .as_ref(py);
 
         py.run(code, Some(globals), None)
-            .map_err(|e| LanguriaError::PythonError {
+            .map_err(|e| LanguloError::PythonError {
                 message: format!("{}", e),
             })
     })
 }
 
-pub fn get_variable(name: &str) -> LanguriaResult<Option<String>> {
+pub fn get_variable(name: &str) -> LanguloResult<Option<String>> {
     Python::with_gil(|py| {
         let globals = PYTHON_GLOBALS
             .get()
-            .ok_or_else(|| LanguriaError::PythonError {
+            .ok_or_else(|| LanguloError::PythonError {
                 message: "Python not initialized".into(),
             })?
             .as_ref(py);
@@ -100,7 +100,7 @@ pub fn get_variable(name: &str) -> LanguriaResult<Option<String>> {
                     .unwrap_or_else(|_| "<unable to display>".into()),
             )),
             Ok(None) => Ok(None),
-            Err(e) => Err(LanguriaError::PythonError {
+            Err(e) => Err(LanguloError::PythonError {
                 message: format!("Failed to get variable {}: {}", name, e),
             }),
         }

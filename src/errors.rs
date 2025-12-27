@@ -3,17 +3,17 @@ use thiserror::Error;
 
 /// Rich error type with source locations for beautiful error reporting
 #[derive(Error, Debug, Diagnostic)]
-pub enum LanguriaError {
+pub enum LanguloError {
     #[error("Internal compiler error: {message}")]
     #[diagnostic(
-        code(languria::internal),
-        help("This is a bug in Languria. Please report it!")
+        code(langulo::internal),
+        help("This is a bug in Langulo. Please report it!")
     )]
     InternalError { message: String },
 
     #[error("Unexpected end of input")]
     #[diagnostic(
-        code(languria::syntax::unexpected_eof),
+        code(langulo::syntax::unexpected_eof),
         help("The expression appears to be incomplete. Did you forget an operand?")
     )]
     UnexpectedEOF {
@@ -25,7 +25,7 @@ pub enum LanguriaError {
 
     #[error("Unexpected token: '{token}'")]
     #[diagnostic(
-        code(languria::syntax::unexpected_token),
+        code(langulo::syntax::unexpected_token),
         help("Expected a number or operator here")
     )]
     UnexpectedToken {
@@ -38,7 +38,7 @@ pub enum LanguriaError {
 
     #[error("Invalid number format: '{value}'")]
     #[diagnostic(
-        code(languria::syntax::invalid_number),
+        code(langulo::syntax::invalid_number),
         help("Numbers should be in the format: 123, 1_000, or 3.14")
     )]
     InvalidNumber {
@@ -51,7 +51,7 @@ pub enum LanguriaError {
 
     #[error("Lexer error")]
     #[diagnostic(
-        code(languria::lexer::no_match),
+        code(langulo::lexer::no_match),
         help("No lexer rule matches this input")
     )]
     LexerError {
@@ -63,18 +63,18 @@ pub enum LanguriaError {
 
     #[error("Python execution error: {message}")]
     #[diagnostic(
-        code(languria::runtime::python),
+        code(langulo::runtime::python),
         help("The generated Python code failed to execute")
     )]
     PythonError { message: String },
 
     #[error("Transpilation error: {message}")]
-    #[diagnostic(code(languria::transpile::error))]
+    #[diagnostic(code(langulo::transpile::error))]
     TranspileError { message: String },
 
     #[error("Expected '{expected}' but found '{found}'")]
     #[diagnostic(
-        code(languria::syntax::unexpected_token),
+        code(langulo::syntax::unexpected_token),
         help("Expected a number or operator here")
     )]
     ExpectedTokenAbsent {
@@ -87,4 +87,4 @@ pub enum LanguriaError {
     },
 }
 
-pub type LanguriaResult<T> = Result<T, LanguriaError>;
+pub type LanguloResult<T> = Result<T, LanguloError>;

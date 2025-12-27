@@ -1,6 +1,6 @@
 use std::char::MAX;
-use crate::errors::LanguriaError;
-use crate::errors::LanguriaResult;
+use crate::errors::LanguloError;
+use crate::errors::LanguloResult;
 use crate::lexer::Tok;
 use crate::parser::AstNode::Root;
 use logos::{Lexer, Source};
@@ -32,10 +32,10 @@ impl From<AstNode> for rowan::SyntaxKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Languria {}
-pub type LanguriaSyntaxNode = SyntaxNode<Languria>;
+pub enum Langulo {}
+pub type LanguloSyntaxNode = SyntaxNode<Langulo>;
 
-impl rowan::Language for Languria {
+impl rowan::Language for Langulo {
     type Kind = AstNode;
     fn kind_from_raw(raw: rowan::SyntaxKind) -> Self::Kind {
         assert!(raw.0 <= Root as u16);
@@ -92,7 +92,7 @@ pub struct Parser<'src> {
     current_offset: usize,
 }
 
-pub fn parse(source: &str) -> LanguriaResult<LanguriaSyntaxNode> {
+pub fn parse(source: &str) -> LanguloResult<LanguloSyntaxNode> {
     let mut parser = Parser::new(source);
     parser.parse_root()?;
     let ast = parser.ast_builder.finish();
@@ -109,29 +109,29 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn next_token(&mut self) -> LanguriaResult<Tok<'src>> {
+    fn next_token(&mut self) -> LanguloResult<Tok<'src>> {
         self.skip_trivia()?;
         match self.lexer.next() {
             Some(Ok(tok)) => {
                 self.current_offset += tok.len();
                 Ok(tok)
             }
-            Some(Err(())) => Err(LanguriaError::LexerError {
+            Some(Err(())) => Err(LanguloError::LexerError {
                 src: self.source.into(),
                 span: (self.current_offset, 1).into(),
             }),
-            None => Err(LanguriaError::UnexpectedEOF {
+            None => Err(LanguloError::UnexpectedEOF {
                 src: self.source.into(),
                 span: (self.current_offset, 1).into(),
             }),
         }
     }
 
-    fn peek_token(&mut self) -> LanguriaResult<Option<Tok<'src>>> {
+    fn peek_token(&mut self) -> LanguloResult<Option<Tok<'src>>> {
         self.skip_trivia()?;
         match self.lexer.peek() {
             Some(Ok(tok)) => Ok(Some(*tok)),
-            Some(Err(())) => Err(LanguriaError::LexerError {
+            Some(Err(())) => Err(LanguloError::LexerError {
                 src: self.source.into(),
                 span: (self.current_offset, 1).into(),
             }),
@@ -139,7 +139,7 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_root(&mut self) -> LanguriaResult<()> {
+    fn parse_root(&mut self) -> LanguloResult<()> {
         self.ast_builder.start_node(Root.into());
         while self.peek_token()?.is_some() {
             self.parse_expr(0)?;
@@ -148,7 +148,7 @@ impl<'src> Parser<'src> {
         Ok(())
     }
 
-    fn parse_expr(&mut self, precedence: u8) -> LanguriaResult<()> {
+    fn parse_expr(&mut self, precedence: u8) -> LanguloResult<()> {
         let checkpoint = self.ast_builder.checkpoint();
         self.parse_prefix()?;
 
@@ -165,7 +165,7 @@ impl<'src> Parser<'src> {
         Ok(())
     }
 
-    fn parse_prefix(&mut self) -> LanguriaResult<()> {
+    fn parse_prefix(&mut self) -> LanguloResult<()> {
         let tok = self.next_token()?;
         match tok {
             Tok::Num(value) => self.add_leaf_node(AstNode::Num, value),
@@ -176,7 +176,7 @@ impl<'src> Parser<'src> {
                 self.ast_builder.finish_node();
             }
             _ => {
-                return Err(LanguriaError::UnexpectedToken {
+                return Err(LanguloError::UnexpectedToken {
                     token: tok.info(),
                     src: self.source.into(),
                     span: (self.current_offset, tok.len()).into(),
@@ -192,7 +192,7 @@ impl<'src> Parser<'src> {
         self.ast_builder.finish_node();
     }
 
-    fn parse_infix(&mut self, checkpoint: Checkpoint, precedence: u8) -> LanguriaResult<()> {
+    fn parse_infix(&mut self, checkpoint: Checkpoint, precedence: u8) -> LanguloResult<()> {
         let tok = self.next_token()?;
         match tok {
             Tok::Plus => self.add_binary_node(AstNode::Add, checkpoint, precedence)?,
@@ -202,7 +202,7 @@ impl<'src> Parser<'src> {
             Tok::Caret => self.add_binary_node(AstNode::Power, checkpoint, precedence)?,
             Tok::Percent => self.add_binary_node(AstNode::Modulo, checkpoint, precedence)?,
             _ => {
-                return Err(LanguriaError::UnexpectedToken {
+                return Err(LanguloError::UnexpectedToken {
                     token: tok.info(),
                     src: self.source.into(),
                     span: (self.current_offset, tok.len()).into(),
@@ -217,14 +217,14 @@ impl<'src> Parser<'src> {
         node: AstNode,
         checkpoint: Checkpoint,
         precedence: u8,
-    ) -> LanguriaResult<()> {
+    ) -> LanguloResult<()> {
         self.ast_builder.start_node_at(checkpoint, node.into());
         self.parse_expr(precedence)?;
         self.ast_builder.finish_node();
         Ok(())
     }
 
-    fn skip_trivia(&mut self) -> LanguriaResult<()> {
+    fn skip_trivia(&mut self) -> LanguloResult<()> {
         while let Some(Ok(tok)) = self.lexer.peek() {
             match tok {
                 Tok::Whitespace(slice) | Tok::BlockComment(slice) | Tok::LineComment(slice) => {
@@ -237,13 +237,13 @@ impl<'src> Parser<'src> {
         Ok(())
     }
 
-    fn require_specific_tok(&mut self, required_tok: Tok) -> LanguriaResult<()> {
+    fn require_specific_tok(&mut self, required_tok: Tok) -> LanguloResult<()> {
         if let Some(found_tok) = self.peek_token()? {
             return if found_tok == required_tok {
                 let _ = self.next_token()?;
                 Ok(())
             } else {
-                Err(LanguriaError::ExpectedTokenAbsent {
+                Err(LanguloError::ExpectedTokenAbsent {
                     expected: required_tok.info(),
                     found: found_tok.info(),
                     src: self.source.into(),
@@ -251,7 +251,7 @@ impl<'src> Parser<'src> {
                 })
             };
         }
-        Err(LanguriaError::ExpectedTokenAbsent {
+        Err(LanguloError::ExpectedTokenAbsent {
             expected: required_tok.info(),
             found: "end of file".into(),
             src: self.source.into(),

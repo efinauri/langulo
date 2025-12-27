@@ -1,7 +1,7 @@
-use crate::errors::{LanguriaError, LanguriaResult};
-use crate::parser::{AstNode, LanguriaSyntaxNode};
+use crate::errors::{LanguloError, LanguloResult};
+use crate::parser::{AstNode, LanguloSyntaxNode};
 
-pub fn transpile(ast: &LanguriaSyntaxNode) -> LanguriaResult<String> {
+pub fn transpile(ast: &LanguloSyntaxNode) -> LanguloResult<String> {
     let mut transpiler = Transpiler::new();
     transpiler.visit(ast)?;
     Ok(transpiler.output)
@@ -18,7 +18,7 @@ impl Transpiler {
         }
     }
 
-    fn visit(&mut self, node: &LanguriaSyntaxNode) -> LanguriaResult<()> {
+    fn visit(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<()> {
         match node.kind() {
             AstNode::Root => {
                 for child in node.children() {
@@ -30,7 +30,7 @@ impl Transpiler {
                 // just in case that python struggles with arbitrary underscores for nums
                 let clean = text.replace('_', "");
                 if clean.is_empty() {
-                    return Err(LanguriaError::TranspileError {
+                    return Err(LanguloError::TranspileError {
                         message: format!("Invalid number literal: {}", text),
                     });
                 }
@@ -44,7 +44,7 @@ impl Transpiler {
             AstNode::Power => self.visit_binary(node, "**")?,
             AstNode::Grouping => {
                 let child = node.first_child()
-                    .ok_or(LanguriaError::TranspileError {
+                    .ok_or(LanguloError::TranspileError {
                         message: "Internal error: Grouping node has no children".to_string(),
                     })?;
                 self.output.push('(');
@@ -55,10 +55,10 @@ impl Transpiler {
         Ok(())
     }
 
-    fn visit_binary(&mut self, node: &LanguriaSyntaxNode, op: &str) -> LanguriaResult<()> {
+    fn visit_binary(&mut self, node: &LanguloSyntaxNode, op: &str) -> LanguloResult<()> {
         let children: Vec<_> = node.children().collect();
         if children.len() != 2 {
-            return Err(LanguriaError::TranspileError {
+            return Err(LanguloError::TranspileError {
                 message: format!(
                     "Binary operator {:?} expected 2 children, got {}",
                     node.kind(),

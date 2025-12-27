@@ -7,6 +7,10 @@ pub enum Tok<'a> {
     Num(&'a str),
     #[regex(r"[ \t\n\r]+")]
     Whitespace(&'a str),
+    #[regex(r"//([^-\n][^\n]*)?", priority = 2)] // needs to be matched before division
+    LineComment(&'a str),
+    #[regex(r"//-[^-]*(-+[^/-][^-]*)*-+//")]
+    BlockComment(&'a str),
     // operations
     #[regex(r"\+")]
     Plus,
@@ -29,6 +33,8 @@ impl Tok<'_> {
         match self {
             Tok::Num(value) => value,
             Tok::Whitespace(_) => "whitespace",
+            Tok::LineComment(_) => "comment",
+            Tok::BlockComment(_) => "multiline comment",
             Tok::Plus => "+",
             Tok::Minus => "-",
             Tok::Star => "*",
@@ -80,5 +86,21 @@ mod tests {
             "+-*/%^",
             &[Plus, Minus, Star, Slash, Percent, Caret, __Test_Eof],
         );
+    }
+
+    #[test]
+    fn test_comments() {
+        expect_tokens(
+            r#"1//normal comment
+2//-multiline on single line-//3
+4//-multiline
+on multiple
+lines-//5
+6"#,
+            &[Num("1"), LineComment("//normal comment"), Whitespace("\n"),
+            Num("2"), BlockComment("//-multiline on single line-//"), Num("3"), Whitespace("\n"),
+                Num("4"), BlockComment("//-multiline\non multiple\nlines-//"), Num("5"), Whitespace("\n"),
+                Num("6"), __Test_Eof]
+        )
     }
 }

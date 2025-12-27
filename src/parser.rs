@@ -49,7 +49,11 @@ impl rowan::Language for Languria {
 impl Tok<'_> {
     fn precedence(&self) -> u8 {
         match self {
-            Tok::Num(_) | Tok::Whitespace(_) | Tok::__Test_Eof => 0,
+            Tok::Num(_)
+            | Tok::Whitespace(_)
+            | Tok::BlockComment(_)
+            | Tok::LineComment(_)
+            | Tok::__Test_Eof => 0,
 
             Tok::Plus | Tok::Minus => 0b_0001_0000,
             Tok::Star | Tok::Slash | Tok::Percent => 0b_0010_0000,
@@ -62,6 +66,8 @@ impl Tok<'_> {
     fn len(&self) -> usize {
         match self {
             Tok::Num(slice)
+            | Tok::LineComment(slice)
+            | Tok::BlockComment(slice)
             | Tok::Whitespace(slice) => slice.len(),
             Tok::Plus
             | Tok::Minus
@@ -99,7 +105,7 @@ impl<'src> Parser<'src> {
     }
 
     fn next_token(&mut self) -> LanguriaResult<Tok<'src>> {
-        self.skip_whitespace()?;
+        self.skip_trivia()?;
         match self.lexer.next() {
             Some(Ok(tok)) => {
                 self.current_offset += tok.len();
@@ -111,7 +117,7 @@ impl<'src> Parser<'src> {
     }
 
     fn peek_token(&mut self) -> LanguriaResult<Option<Tok<'src>>> {
-        self.skip_whitespace()?;
+        self.skip_trivia()?;
         match self.lexer.peek() {
             Some(Ok(tok)) => Ok(Some(*tok)),
             Some(Err(())) => Err(LanguriaError::lexer_error(self.source, self.current_offset)),
@@ -198,10 +204,17 @@ impl<'src> Parser<'src> {
         Ok(())
     }
 
-    fn skip_whitespace(&mut self) -> LanguriaResult<()> {
-        while let Some(Ok(Tok::Whitespace(slice))) = self.lexer.peek() {
-            self.current_offset += slice.len();
-            self.lexer.next();
+    fn skip_trivia(&mut self) -> LanguriaResult<()> {
+        while let Some(Ok(tok)) = self.lexer.peek() {
+            match tok {
+                Tok::Whitespace(slice)
+                | Tok::BlockComment(slice)
+                | Tok::LineComment(slice) => {
+                    self.current_offset += slice.len();
+                    self.lexer.next();
+                }
+                _ => break
+            }
         }
         Ok(())
     }
@@ -224,23 +237,21 @@ mod tests {
     }
 
     #[test]
-    fn test_print_ast() {
+    fn test_arithmetic() {
         print_ast("1 + 2 * 3");
         expect_ast("1 + 2 * 3", &[Root, Add, Num, Multiply, Num, Num]);
-    }
-
-    #[test]
-    fn test_power_precedence() {
         expect_ast("2 ^ 3 ^ 2", &[Root, Power, Power, Num, Num, Num]);
-    }
-
-    #[test]
-    fn test_complex_expression() {
         expect_ast(
             "1 + 2 * 3 - 4 / 2",
             &[
                 Root, Subtract, Add, Num, Multiply, Num, Num, Divide, Num, Num,
             ],
         );
+
+    }
+
+    #[test]
+    fn test_comments() {
+        expect_ast("1 //- ignored -// + 2 * 3 //also ignored", &[Root, Add, Num, Multiply, Num, Num]);
     }
 }

@@ -36,12 +36,28 @@ impl Transpiler {
                 }
                 self.output.push_str(&text);
             }
-            AstNode::Add => self.visit_binary(node, "+")?,
-            AstNode::Subtract => self.visit_binary(node, "-")?,
-            AstNode::Multiply => self.visit_binary(node, "*")?,
-            AstNode::Divide => self.visit_binary(node, "/")?,
-            AstNode::Modulo => self.visit_binary(node, "%")?,
-            AstNode::Power => self.visit_binary(node, "**")?,
+            AstNode::Bool => {
+                let text = node.text().to_string();
+                // python is True/False, needs to be capitalized
+                let capitalized = text.chars().next().unwrap().to_uppercase().collect::<String>() + &text[1..];
+                self.output.push_str(&capitalized);
+            }
+            AstNode::Not => self.visit_unary(node, "not ")?,
+            AstNode::Add => self.visit_binary(node, " + ")?,
+            AstNode::Subtract => self.visit_binary(node, " - ")?,
+            AstNode::Multiply => self.visit_binary(node, " * ")?,
+            AstNode::Divide => self.visit_binary(node, " / ")?,
+            AstNode::Modulo => self.visit_binary(node, " % ")?,
+            AstNode::Power => self.visit_binary(node, " ** ")?,
+            AstNode::And => self.visit_binary(node, " and ")?,
+            AstNode::Or => self.visit_binary(node, " or ")?,
+            AstNode::Xor => self.visit_binary(node, " ^ ")?,
+            AstNode::Eq => self.visit_binary(node, " == ")?,
+            AstNode::Neq => self.visit_binary(node, " != ")?,
+            AstNode::Gt => self.visit_binary(node, " > ")?,
+            AstNode::Lt => self.visit_binary(node, " < ")?,
+            AstNode::Geq => self.visit_binary(node, " >= ")?,
+            AstNode::Leq => self.visit_binary(node, " <= ")?,
             AstNode::Grouping => {
                 let child = node.first_child()
                     .ok_or(LanguloError::TranspileError {
@@ -72,6 +88,26 @@ impl Transpiler {
         self.visit(&children[0])?;
         self.output.push_str(op);
         self.visit(&children[1])?;
+        self.output.push(')');
+        Ok(())
+    }
+
+    fn visit_unary(&mut self, node: &LanguloSyntaxNode, op: &str) -> LanguloResult<()> {
+        if node.children().count() != 1 {
+            return Err(LanguloError::TranspileError {
+                message: format!(
+                    "Unary operator {:?} expected 1 child, got {}",
+                    node.kind(),
+                    node.children().count()
+                ),
+            });
+        }
+        let child = node.first_child()
+            // safe due to above check
+            .unwrap();
+        self.output.push_str(op);
+        self.output.push('(');
+        self.visit(&child)?;
         self.output.push(')');
         Ok(())
     }
@@ -123,5 +159,10 @@ mod tests {
     #[test]
     fn test_grouping() {
         assert_eq!(transpile_source("(2-3)*(4-5)"), "(((2-3))*((4-5)))");
+    }
+    
+    #[test]
+    fn test_booleans() { 
+        assert_eq!(transpile_source("not true and false"), "(not(True) and False)");
     }
 }

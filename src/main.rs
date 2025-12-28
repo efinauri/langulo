@@ -6,12 +6,13 @@ use langulo::repl::Repl;
 #[command(about = "a programming language")]
 struct Cli {
     #[arg(short, long)]
-    show_transpiled_python: bool,
+    debug: bool,
 }
 
 fn main() {
     let cli = Cli::parse();
-    if let Err(e) = Repl::new(cli.show_transpiled_python).run() {
+    let show_python = cli.debug || cfg!(debug_assertions);
+    if let Err(e) = Repl::new(show_python).run() {
         eprintln!("Fatal error: {:?}", e);
         std::process::exit(1);
     }

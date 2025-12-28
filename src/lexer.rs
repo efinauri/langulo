@@ -58,6 +58,8 @@ pub enum Tok<'a> { // to make it easier to access token len, all tokens that are
     LParen,
     #[regex(r"\)")]
     RParen,
+    #[regex(r"=")]
+    Assign,
     #[allow(dead_code, non_camel_case_types)]
     __Test_Eof,
 }
@@ -91,6 +93,7 @@ impl Tok<'_> {
             Tok::LParen => "(",
             Tok::RParen => ")",
             Tok::Dollar => "$",
+            Tok::Assign => "=",
             Tok::__Test_Eof => "EOF",
         }
         .into()
@@ -156,7 +159,7 @@ lines-//5
 
     #[test]
     fn test_others() {
-        expect_tokens("()$", &[LParen, RParen, Dollar, __Test_Eof]);
+        expect_tokens("()$=", &[LParen, RParen, Dollar, Assign, __Test_Eof]);
     }
 
     #[test]

@@ -2,6 +2,7 @@ use crate::errors::{LanguloError, LanguloResult};
 use crate::parser::{AstNode, LanguloSyntaxNode};
 use std::collections::HashSet;
 use std::string::ToString;
+use pyo3::IntoPy;
 
 const TMP_VAR_NAME: &'static str = "tmp";
 
@@ -81,9 +82,9 @@ impl PythonEmitter {
         self.checkpoints.push(self.current_line.len());
     }
 
-    /// grabs the current_line slice since the last set checkpoint, assign it to a tmp variable and adds the assignment to the emitted code.
-    /// returns the tmp variable that was used.
-    fn hoist_checkpoint_to_tmp(&mut self) -> String {
+    /// grabs the current_line slice since the last set checkpoint, assign it to variable and adds the assignment to the emitted code.
+    /// returns the variable name that was used.
+    fn hoist_checkpoint(&mut self, var: String) -> String {
         assert!(!self.checkpoints.is_empty());
         let start = self
             .checkpoints
@@ -93,12 +94,18 @@ impl PythonEmitter {
         let expr = self.current_line[start..].to_string();
         self.current_line.truncate(start);
 
-        let tmp = self.fresh_tmp();
         let indent = "    ".repeat(self.indent);
-        self.lines.push(format!("{}{} = {}", indent, tmp, expr));
+        self.lines.push(format!("{}{} = {}", indent, var, expr));
 
-        tmp
+        var
     }
+
+    fn hoist_checkpoint_to_tmp(&mut self) -> String {
+        let tmp = self.fresh_tmp();
+        self.hoist_checkpoint(tmp)
+    }
+
+
 
     fn finish(mut self) -> String {
         self.newline();
@@ -132,6 +139,11 @@ impl Transpiler {
         self.emitter.finish()
     }
 
+    fn literal_to_var(node: &LanguloSyntaxNode) -> String {
+        // prepend var to make sure we avoid reserved keywords
+        format!("var{}", node.text().to_string())
+    }
+
     fn visit(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<()> {
         match node.kind() {
             AstNode::Root => {
@@ -139,6 +151,7 @@ impl Transpiler {
                     self.visit(&child)?;
                 }
             }
+            AstNode::Literal => self.emitter.write(&Transpiler::literal_to_var(node)),
             AstNode::Num => {
                 let text = node.text().to_string();
                 let clean = text.replace('_', "");
@@ -193,6 +206,27 @@ impl Transpiler {
                 self.visit(&child)?;
                 let tmp = self.emitter.hoist_checkpoint_to_tmp();
                 self.emitter.write(&format!("_print({})", tmp));
+            }
+            AstNode::Assign => {
+                assert_eq!(node.children().count(), 2);
+                let var_node = node.first_child().unwrap();
+                if let Some(AstNode::Literal) = var_node.kind().into() {
+                    // an assignment evaluates to the assigned value, so it needs hoisting as well (this time named hoisting)
+                    // langulo: 3 + x = 2
+                    // python: x = 2    3 + x
+                    //var can be visited, will just place the varname where the evaluated expression should be
+                    self.visit(&var_node)?;
+                    self.emitter.mark_checkpoint();
+                    let val_node = node.last_child().unwrap();
+                    self.visit(&val_node)?;
+                    let _ = self.emitter.hoist_checkpoint(Transpiler::literal_to_var(&var_node));
+                }
+                else {
+                    return Err(LanguloError::TranspileError {
+                        message: format!("Invalid assignment target: {:?}", var_node.kind()),
+                    });
+                }
+
             }
         }
         Ok(())
@@ -275,5 +309,14 @@ mod tests {
         assert!(result.contains("tmp0 = 1"));
         assert!(result.contains("tmp1 = _print(tmp0)"));
         assert!(result.contains("_print(tmp1)"));
+    }
+
+    #[test]
+    fn test_assignment() {
+        let mut result = transpile_source("x = 42");
+        assert!(result.contains("varx = 42"));
+        result = transpile_source("3 + (x=2)");
+        assert!(result.contains("varx = 2"));
+        assert!(result.contains("3 + (varx)"));
     }
 }

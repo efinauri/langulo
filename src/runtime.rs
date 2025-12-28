@@ -311,4 +311,13 @@ mod tests {
         // (1 + $2) * (3 + $4) = (1 + 2) * (3 + 4) = 3 * 7 = 21
         assert_eq!(eval_langulo_display("(1 + $2) * (3 + $4)"), "21");
     }
+
+    #[test]
+    fn assignments() {
+        assert_eq!(eval_langulo_display("x = 2"), "2");
+        assert_eq!(eval_langulo_display("x"), "2");
+        assert_eq!(eval_langulo_display("3 + (x=4)"), "7");
+        assert_eq!(eval_langulo_display("x"), "4");
+
+    }
 }

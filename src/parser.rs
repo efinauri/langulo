@@ -32,6 +32,8 @@ pub enum AstNode {
     Lt,
     Gt,
     Print,
+    Assign,
+    Literal,
 }
 
 // plumbing for rowan
@@ -71,6 +73,8 @@ impl Tok<'_> {
             | Tok::LParen
             | Tok::RParen
             | Tok::__Test_Eof => 0,
+
+            Tok::Assign => 0b_0000_0001,
 
             Tok::And(_) | Tok::Or(_) | Tok::Not(_) | Tok::Xor(_) => 0b_0000_0100,
             Tok::Eq(_) | Tok::Neq(_) => 0b_0000_1000,
@@ -112,6 +116,7 @@ impl Tok<'_> {
             | Tok::Gt
             | Tok::Dollar
             | Tok::RParen
+            | Tok::Assign
             | Tok::LParen => 1,
             Tok::__Test_Eof => 0,
         }
@@ -202,9 +207,7 @@ impl<'src> Parser<'src> {
         let tok = self.next_token()?;
         match tok {
             Tok::Num(value) => self.add_leaf_node(AstNode::Num, value),
-            Tok::Literal(_) => {
-                todo!("added literal just to test keyword but did not implement them yet")
-            }
+            Tok::Literal(value) => self.add_leaf_node(AstNode::Literal, value),
             Tok::True(value) | Tok::False(value) => self.add_leaf_node(AstNode::Bool, value),
             Tok::LParen => {
                 self.ast_builder.start_node(AstNode::Grouping.into());
@@ -249,6 +252,7 @@ impl<'src> Parser<'src> {
             Tok::Lt => self.add_binary_node(AstNode::Lt, checkpoint, precedence)?,
             Tok::Geq(_) => self.add_binary_node(AstNode::Geq, checkpoint, precedence)?,
             Tok::Leq(_) => self.add_binary_node(AstNode::Leq, checkpoint, precedence)?,
+            Tok::Assign => self.add_binary_node(AstNode::Assign, checkpoint, precedence)?,
             _ => {
                 return Err(LanguloError::UnexpectedToken {
                     token: tok.info(),
@@ -401,6 +405,15 @@ mod tests {
             "not true and false xor true",
             &[Root, Xor, And, Not, Bool, Bool, Bool],
             &[&[1, 2, 6], &[2, 3, 5], &[3, 4]],
+        )
+    }
+
+    #[test]
+    fn test_assign() {
+        expect_ast_with_children(
+            "x = 5",
+            &[Root, Assign, Literal, Num],
+            &[&[1, 2, 3]],
         )
     }
 }

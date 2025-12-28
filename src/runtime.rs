@@ -43,7 +43,27 @@ pub fn eval_python(code: &str) -> LanguloResult<EvalResult> {
             })?
             .as_ref(py);
 
-        match py.eval(code, Some(globals), None) {
+        // Split into statements and final expression
+        let lines: Vec<&str> = code.lines().collect();
+
+        if lines.is_empty() {
+            return Err(LanguloError::PythonError {
+                message: "Empty code".into(),
+            });
+        }
+
+        // Run all lines except the last as statements
+        if lines.len() > 1 {
+            let statements = lines[..lines.len() - 1].join("\n");
+            py.run(&statements, Some(globals), None)
+                .map_err(|e| LanguloError::PythonError {
+                    message: format!("Statement error: {}", e),
+                })?;
+        }
+
+        // Eval the last line as an expression
+        let expr = lines.last().unwrap();
+        match py.eval(expr, Some(globals), None) {
             Ok(result) => {
                 let display = result
                     .repr()
@@ -110,10 +130,48 @@ pub fn get_variable(name: &str) -> LanguloResult<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parser::parse;
+    use crate::transpile::transpile;
 
     fn setup() {
         let _ = init_python();
     }
+
+    /// Helper: transpile Langulo source and evaluate it
+    fn eval_langulo(source: &str) -> LanguloResult<EvalResult> {
+        setup();
+        let ast = parse(source).map_err(|e| LanguloError::PythonError {
+            message: format!("Parse error: {:?}", e),
+        })?;
+        let python_code = transpile(&ast).map_err(|e| LanguloError::PythonError {
+            message: format!("Transpile error: {:?}", e),
+        })?;
+        eval_python(&python_code)
+    }
+
+    /// Helper: transpile and evaluate, return the display string
+    fn eval_langulo_display(source: &str) -> String {
+        eval_langulo(source).unwrap().display
+    }
+
+    // ===================
+    // Bug regression tests
+    // ===================
+
+    #[test]
+    fn test_bug_print_in_expression_multiline() {
+        // This was failing because eval_python couldn't handle statements + expression
+        // Error was: SyntaxError: invalid syntax
+        setup();
+        let result = eval_langulo("3 + $(4+2) * 2");
+        assert!(result.is_ok(), "Failed with: {:?}", result.err());
+        // 4+2 = 6, printed, then 3 + 6 * 2 = 3 + 12 = 15
+        assert_eq!(result.unwrap().display, "15");
+    }
+
+    // ===================
+    // Raw Python tests
+    // ===================
 
     #[test]
     fn test_eval_simple() {
@@ -151,5 +209,106 @@ mod tests {
         setup();
         let result = eval_python("math.pi").unwrap();
         assert!(result.display.starts_with("3.14"));
+    }
+
+    #[test]
+    fn test_multiline_statements_then_expression() {
+        setup();
+        let code = "x = 10\ny = 20\nx + y";
+        let result = eval_python(code).unwrap();
+        assert_eq!(result.display, "30");
+    }
+
+    // ===================
+    // Langulo integration tests
+    // ===================
+
+    #[test]
+    fn test_langulo_simple_number() {
+        assert_eq!(eval_langulo_display("42"), "42");
+        assert_eq!(eval_langulo_display("3.14"), "3.14");
+    }
+
+    #[test]
+    fn test_langulo_arithmetic() {
+        assert_eq!(eval_langulo_display("1 + 2"), "3");
+        assert_eq!(eval_langulo_display("10 - 3"), "7");
+        assert_eq!(eval_langulo_display("4 * 5"), "20");
+        assert_eq!(eval_langulo_display("15 / 3"), "5.0");
+        assert_eq!(eval_langulo_display("17 % 5"), "2");
+    }
+
+    #[test]
+    fn test_langulo_power() {
+        assert_eq!(eval_langulo_display("2 ^ 10"), "1024");
+        assert_eq!(eval_langulo_display("3 ^ 3"), "27");
+    }
+
+    #[test]
+    fn test_langulo_precedence() {
+        // 2 + 3 * 4 = 2 + 12 = 14
+        assert_eq!(eval_langulo_display("2 + 3 * 4"), "14");
+        // 2 * 3 + 4 = 6 + 4 = 10
+        assert_eq!(eval_langulo_display("2 * 3 + 4"), "10");
+        // 2 ^ 3 * 4 = 8 * 4 = 32
+        assert_eq!(eval_langulo_display("2 ^ 3 * 4"), "32");
+    }
+
+    #[test]
+    fn test_langulo_grouping() {
+        assert_eq!(eval_langulo_display("(2 + 3) * 4"), "20");
+        assert_eq!(eval_langulo_display("2 * (3 + 4)"), "14");
+        assert_eq!(eval_langulo_display("((1 + 2) * (3 + 4))"), "21");
+    }
+
+    #[test]
+    fn test_langulo_booleans() {
+        assert_eq!(eval_langulo_display("true"), "True");
+        assert_eq!(eval_langulo_display("false"), "False");
+        assert_eq!(eval_langulo_display("true and false"), "False");
+        assert_eq!(eval_langulo_display("true or false"), "True");
+        assert_eq!(eval_langulo_display("not true"), "False");
+        assert_eq!(eval_langulo_display("not false"), "True");
+    }
+
+    #[test]
+    fn test_langulo_comparisons() {
+        assert_eq!(eval_langulo_display("1 == 1"), "True");
+        assert_eq!(eval_langulo_display("1 == 2"), "False");
+        assert_eq!(eval_langulo_display("1 != 2"), "True");
+        assert_eq!(eval_langulo_display("1 < 2"), "True");
+        assert_eq!(eval_langulo_display("2 > 1"), "True");
+        assert_eq!(eval_langulo_display("1 <= 1"), "True");
+        assert_eq!(eval_langulo_display("1 >= 1"), "True");
+    }
+
+    #[test]
+    fn test_langulo_print_simple() {
+        // $3 should print 3 and return 3
+        assert_eq!(eval_langulo_display("$3"), "3");
+    }
+
+    #[test]
+    fn test_langulo_print_expression() {
+        // $(1 + 2) should print 3 and return 3
+        assert_eq!(eval_langulo_display("$(1 + 2)"), "3");
+    }
+
+    #[test]
+    fn test_langulo_print_in_arithmetic() {
+        // 1 + $2 + 3 = 1 + 2 + 3 = 6 (and prints 2)
+        assert_eq!(eval_langulo_display("1 + $2 + 3"), "6");
+    }
+
+    #[test]
+    fn test_langulo_nested_print() {
+        // $($1) should print 1, then print 1 again, return 1
+        assert_eq!(eval_langulo_display("$($1)"), "1");
+    }
+
+    #[test]
+    fn test_langulo_complex_expression_with_print() {
+        // (1 + $2) * (3 + $4) = (1 + 2) * (3 + 4) = 3 * 7 = 21
+        assert_eq!(eval_langulo_display("(1 + $2) * (3 + $4)"), "21");
     }
 }

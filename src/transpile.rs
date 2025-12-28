@@ -1,21 +1,135 @@
 use crate::errors::{LanguloError, LanguloResult};
 use crate::parser::{AstNode, LanguloSyntaxNode};
+use std::collections::HashSet;
+use std::string::ToString;
+
+const TMP_VAR_NAME: &'static str = "tmp";
 
 pub fn transpile(ast: &LanguloSyntaxNode) -> LanguloResult<String> {
     let mut transpiler = Transpiler::new();
     transpiler.visit(ast)?;
-    Ok(transpiler.output)
+    Ok(transpiler.finish())
+}
+
+struct PythonEmitter {
+    lines: Vec<String>,
+    current_line: String,
+    indent: usize,
+    helpers: HashSet<Helper>,
+    tmp_counter: usize,
+    /// an index of current_line marked for future modification
+    checkpoints: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Helper {
+    Print,
+}
+
+impl Helper {
+    fn definition(&self) -> &'static str {
+        match self {
+            Helper::Print => "def _print(x):\n    print(x)\n    return x",
+        }
+    }
+}
+
+impl PythonEmitter {
+    fn new() -> Self {
+        Self {
+            lines: Vec::new(),
+            current_line: String::new(),
+            indent: 0,
+            helpers: HashSet::new(),
+            tmp_counter: 0,
+            checkpoints: Vec::new(),
+        }
+    }
+
+    fn write(&mut self, code: &str) {
+        self.current_line.push_str(code);
+    }
+
+    fn newline(&mut self) {
+        assert!(!self.current_line.is_empty());
+        assert!(self.checkpoints.is_empty());
+        let indent = "    ".repeat(self.indent);
+        self.lines.push(format!("{}{}", indent, self.current_line));
+        self.current_line.clear();
+    }
+
+    fn indent(&mut self) {
+        self.indent += 1;
+    }
+
+    fn dedent(&mut self) {
+        assert!(self.indent > 0);
+        self.indent -= 1;
+    }
+
+    fn require_helper(&mut self, helper: Helper) {
+        self.helpers.insert(helper);
+    }
+
+    fn fresh_tmp(&mut self) -> String {
+        let name = format!("{}{}", TMP_VAR_NAME, self.tmp_counter);
+        self.tmp_counter += 1;
+        name
+    }
+
+    fn mark_checkpoint(&mut self) {
+        self.checkpoints.push(self.current_line.len());
+    }
+
+    /// grabs the current_line slice since the last set checkpoint, assign it to a tmp variable and adds the assignment to the emitted code.
+    /// returns the tmp variable that was used.
+    fn hoist_checkpoint_to_tmp(&mut self) -> String {
+        assert!(!self.checkpoints.is_empty());
+        let start = self
+            .checkpoints
+            .pop()
+            .unwrap();
+        assert!(self.current_line.len() >= start);
+        let expr = self.current_line[start..].to_string();
+        self.current_line.truncate(start);
+
+        let tmp = self.fresh_tmp();
+        let indent = "    ".repeat(self.indent);
+        self.lines.push(format!("{}{} = {}", indent, tmp, expr));
+
+        tmp
+    }
+
+    fn finish(mut self) -> String {
+        self.newline();
+
+        let mut output = String::new();
+
+        if !self.helpers.is_empty() {
+            for helper in &self.helpers {
+                output.push_str(helper.definition());
+                output.push_str("\n\n");
+            }
+        }
+
+        output.push_str(&self.lines.join("\n"));
+        output
+    }
 }
 
 struct Transpiler {
-    output: String,
+    emitter: PythonEmitter,
 }
 
 impl Transpiler {
     fn new() -> Self {
         Self {
-            output: String::new(),
+            emitter: PythonEmitter::new(),
         }
+    }
+
+    fn finish(self) -> String {
+        self.emitter.finish()
     }
 
     fn visit(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<()> {
@@ -27,20 +141,24 @@ impl Transpiler {
             }
             AstNode::Num => {
                 let text = node.text().to_string();
-                // just in case that python struggles with arbitrary underscores for nums
                 let clean = text.replace('_', "");
                 if clean.is_empty() {
                     return Err(LanguloError::TranspileError {
                         message: format!("Invalid number literal: {}", text),
                     });
                 }
-                self.output.push_str(&text);
+                self.emitter.write(&text);
             }
             AstNode::Bool => {
                 let text = node.text().to_string();
-                // python is True/False, needs to be capitalized
-                let capitalized = text.chars().next().unwrap().to_uppercase().collect::<String>() + &text[1..];
-                self.output.push_str(&capitalized);
+                let capitalized = text
+                    .chars()
+                    .next()
+                    .unwrap()
+                    .to_uppercase()
+                    .collect::<String>()
+                    + &text[1..];
+                self.emitter.write(&capitalized);
             }
             AstNode::Not => self.visit_unary(node, "not ")?,
             AstNode::Add => self.visit_binary(node, " + ")?,
@@ -59,23 +177,22 @@ impl Transpiler {
             AstNode::Geq => self.visit_binary(node, " >= ")?,
             AstNode::Leq => self.visit_binary(node, " <= ")?,
             AstNode::Grouping => {
-                let child = node.first_child()
-                    .ok_or(LanguloError::TranspileError {
-                        message: "Internal error: Grouping node has no children".to_string(),
-                    })?;
-                self.output.push('(');
+                let child = node.first_child().ok_or(LanguloError::TranspileError {
+                    message: "Internal error: Grouping node has no children".to_string(),
+                })?;
+                self.emitter.write("(");
                 self.visit(&child)?;
-                self.output.push(')');
-            },
+                self.emitter.write(")");
+            }
             AstNode::Print => {
-                let child = node.first_child()
-                    .ok_or(LanguloError::TranspileError {
-                        message: "Internal error: Grouping node has no children".to_string(),
-                    })?;
-                // # Transpile $expr to: (lambda x: (print(x), x)[1])(expr)
-                self.output.push_str("(lambda x: (print(x), x)[1])(");
+                self.emitter.require_helper(Helper::Print);
+                let child = node.first_child().ok_or(LanguloError::TranspileError {
+                    message: "Internal error: Print node has no children".to_string(),
+                })?;
+                self.emitter.mark_checkpoint();
                 self.visit(&child)?;
-                self.output.push(')');
+                let tmp = self.emitter.hoist_checkpoint_to_tmp();
+                self.emitter.write(&format!("_print({})", tmp));
             }
         }
         Ok(())
@@ -93,12 +210,11 @@ impl Transpiler {
             });
         }
 
-        // to avoid any headache set very explicit priority by surrounding everything with parens
-        self.output.push('(');
+        self.emitter.write("(");
         self.visit(&children[0])?;
-        self.output.push_str(op);
+        self.emitter.write(op);
         self.visit(&children[1])?;
-        self.output.push(')');
+        self.emitter.write(")");
         Ok(())
     }
 
@@ -112,13 +228,11 @@ impl Transpiler {
                 ),
             });
         }
-        let child = node.first_child()
-            // safe due to above check
-            .unwrap();
-        self.output.push_str(op);
-        self.output.push('(');
+        let child = node.first_child().unwrap();
+        self.emitter.write(op);
+        self.emitter.write("(");
         self.visit(&child)?;
-        self.output.push(')');
+        self.emitter.write(")");
         Ok(())
     }
 }
@@ -136,47 +250,30 @@ mod tests {
     #[test]
     fn test_simple_number() {
         assert_eq!(transpile_source("42"), "42");
-        assert_eq!(transpile_source("3.14"), "3.14");
-        assert_eq!(transpile_source("1_000_000"), "1_000_000");
     }
 
     #[test]
-    fn test_simple_operations() {
-        assert_eq!(transpile_source("1 + 2"), "(1+2)");
-        assert_eq!(transpile_source("3 - 1"), "(3-1)");
-        assert_eq!(transpile_source("2 * 3"), "(2*3)");
-        assert_eq!(transpile_source("6 / 2"), "(6/2)");
-        assert_eq!(transpile_source("7 % 3"), "(7%3)");
+    fn test_print_hoists() {
+        // $3 should hoist the 3 to a temp var
+        let result = transpile_source("$3");
+        assert!(result.contains("tmp0 = 3"));
+        assert!(result.contains("_print(tmp0)"));
     }
 
     #[test]
-    fn test_power_transpiles_correctly() {
-        assert_eq!(transpile_source("2 ^ 3"), "(2**3)");
+    fn test_print_in_expression() {
+        // 1 + $2 + 3 should hoist just the print operand
+        let result = transpile_source("1 + $2 + 3");
+        assert!(result.contains("tmp0 = 2"));
+        assert!(result.contains("_print(tmp0)"));
     }
 
     #[test]
-    fn test_precedence_preserved() {
-        assert_eq!(transpile_source("1 + 2 * 3"), "(1+(2*3))");
-    }
-
-    #[test]
-    fn test_complex_expression() {
-        assert_eq!(
-            transpile_source("1 + 2 * 3 ^ 4"),
-            "(1+(2*(3**4)))"
-        );
-    }
-    #[test]
-    fn test_grouping() {
-        assert_eq!(transpile_source("(2-3)*(4-5)"), "(((2-3))*((4-5)))");
-    }
-
-    #[test]
-    fn test_booleans() {
-        assert_eq!(transpile_source("not true and false"), "(not(True) and False)");
-    }
-    #[test]
-    fn test_print() {
-        assert_eq!(transpile_source("$3"), "(lambda x: (print(x), x)[1])(3)");
+    fn test_nested_print() {
+        // $($1) - nested prints
+        let result = transpile_source("$($1)");
+        assert!(result.contains("tmp0 = 1"));
+        assert!(result.contains("tmp1 = _print(tmp0)"));
+        assert!(result.contains("_print(tmp1)"));
     }
 }

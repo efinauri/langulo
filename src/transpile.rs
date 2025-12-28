@@ -67,6 +67,16 @@ impl Transpiler {
                 self.visit(&child)?;
                 self.output.push(')');
             },
+            AstNode::Print => {
+                let child = node.first_child()
+                    .ok_or(LanguloError::TranspileError {
+                        message: "Internal error: Grouping node has no children".to_string(),
+                    })?;
+                // # Transpile $expr to: (lambda x: (print(x), x)[1])(expr)
+                self.output.push_str("(lambda x: (print(x), x)[1])(");
+                self.visit(&child)?;
+                self.output.push(')');
+            }
         }
         Ok(())
     }
@@ -160,9 +170,13 @@ mod tests {
     fn test_grouping() {
         assert_eq!(transpile_source("(2-3)*(4-5)"), "(((2-3))*((4-5)))");
     }
-    
+
     #[test]
-    fn test_booleans() { 
+    fn test_booleans() {
         assert_eq!(transpile_source("not true and false"), "(not(True) and False)");
+    }
+    #[test]
+    fn test_print() {
+        assert_eq!(transpile_source("$3"), "(lambda x: (print(x), x)[1])(3)");
     }
 }

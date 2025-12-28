@@ -31,6 +31,7 @@ pub enum AstNode {
     Geq,
     Lt,
     Gt,
+    Print,
 }
 
 // plumbing for rowan
@@ -78,6 +79,7 @@ impl Tok<'_> {
             Tok::Plus | Tok::Minus => 0b_0001_0000,
             Tok::Star | Tok::Slash | Tok::Percent => 0b_0010_0000,
             Tok::Caret => 0b_1000_0000,
+            Tok::Dollar => 0b_1100_0000,
         }
     }
 }
@@ -108,6 +110,7 @@ impl Tok<'_> {
             | Tok::Caret
             | Tok::Lt
             | Tok::Gt
+            | Tok::Dollar
             | Tok::RParen
             | Tok::LParen => 1,
             Tok::__Test_Eof => 0,
@@ -210,6 +213,7 @@ impl<'src> Parser<'src> {
                 self.ast_builder.finish_node();
             }
             Tok::Not(_) => self.add_unary_node_prefix(AstNode::Not, tok.precedence())?,
+            Tok::Dollar => self.add_unary_node_prefix(AstNode::Print, tok.precedence())?,
             _ => {
                 return Err(LanguloError::UnexpectedToken {
                     token: tok.info(),
@@ -385,9 +389,9 @@ mod tests {
     #[test]
     fn test_grouping() {
         expect_ast_with_children(
-            "2 * (3 - 1)",
-            &[Root, Multiply, Num, Grouping, Subtract, Num, Num],
-            &[&[1, 2, 3], &[3, 4], &[4, 5, 6]],
+            "2 * ($3 - 1)",
+            &[Root, Multiply, Num, Grouping, Subtract, Print, Num, Num],
+            &[&[1, 2, 3], &[3, 4], &[4, 5, 7], &[5, 6]],
         )
     }
 

@@ -51,6 +51,8 @@ pub enum Tok<'a> { // to make it easier to access token len, all tokens that are
     Leq(&'a str),
     #[regex(r">=")]
     Geq(&'a str),
+    #[regex(r"\$")]
+    Dollar,
     // grouping
     #[regex(r"\(")]
     LParen,
@@ -88,6 +90,7 @@ impl Tok<'_> {
             Tok::Geq(_) => ">=",
             Tok::LParen => "(",
             Tok::RParen => ")",
+            Tok::Dollar => "$",
             Tok::__Test_Eof => "EOF",
         }
         .into()
@@ -152,8 +155,8 @@ lines-//5
     }
 
     #[test]
-    fn test_grouping() {
-        expect_tokens("()", &[LParen, RParen]);
+    fn test_others() {
+        expect_tokens("()$", &[LParen, RParen, Dollar, __Test_Eof]);
     }
 
     #[test]

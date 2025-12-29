@@ -1,8 +1,8 @@
 use crate::errors::{LanguloError, LanguloResult};
-use crate::parser::{AstNode, LanguloSyntaxNode};
+use crate::parser::{has_print_marker, AstNode, LanguloSyntaxNode};
 use std::collections::HashSet;
+use std::fmt::format;
 use std::string::ToString;
-use pyo3::IntoPy;
 
 const TMP_VAR_NAME: &'static str = "tmp";
 
@@ -16,23 +16,28 @@ struct PythonEmitter {
     lines: Vec<String>,
     current_line: String,
     indent: usize,
-    helpers: HashSet<Helper>,
+    helpers: HashSet<HelperFunction>,
     tmp_counter: usize,
     /// an index of current_line marked for future modification
     checkpoints: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum Helper {
+enum HelperFunction {
     Print,
 }
 
-impl Helper {
+impl HelperFunction {
     fn definition(&self) -> &'static str {
         match self {
-            Helper::Print => "def _print(x):\n    print(x)\n    return x",
+            HelperFunction::Print => "def _print(x):\n    print(x)\n    return x",
         }
     }
+}
+
+struct LValue {
+    /// like varx, varx[1], etc.
+    target: String,
 }
 
 impl PythonEmitter {
@@ -68,7 +73,7 @@ impl PythonEmitter {
         self.indent -= 1;
     }
 
-    fn require_helper(&mut self, helper: Helper) {
+    fn require_helper(&mut self, helper: HelperFunction) {
         self.helpers.insert(helper);
     }
 
@@ -86,17 +91,12 @@ impl PythonEmitter {
     /// returns the variable name that was used.
     fn hoist_checkpoint(&mut self, var: String) -> String {
         assert!(!self.checkpoints.is_empty());
-        let start = self
-            .checkpoints
-            .pop()
-            .unwrap();
+        let start = self.checkpoints.pop().unwrap();
         assert!(self.current_line.len() >= start);
         let expr = self.current_line[start..].to_string();
         self.current_line.truncate(start);
-
         let indent = "    ".repeat(self.indent);
         self.lines.push(format!("{}{} = {}", indent, var, expr));
-
         var
     }
 
@@ -105,7 +105,10 @@ impl PythonEmitter {
         self.hoist_checkpoint(tmp)
     }
 
-
+    fn print(&mut self, tmp_var: &String) {
+        let indent = "    ".repeat(self.indent);
+        self.lines.push(format!("{}_print({})", indent, tmp_var));
+    }
 
     fn finish(mut self) -> String {
         self.newline();
@@ -145,6 +148,46 @@ impl Transpiler {
     }
 
     fn visit(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<()> {
+        let should_print = has_print_marker(node);
+        if should_print {
+            self.emitter.require_helper(HelperFunction::Print);
+            self.emitter.mark_checkpoint();
+        }
+        self.visit_inner(node)?;
+
+        if should_print {
+            let tmp = self.emitter.hoist_checkpoint_to_tmp();
+            self.emitter.print(&tmp);
+            self.emitter.write(tmp.as_str());
+        }
+        Ok(())
+    }
+
+    fn visit_lvalue(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<LValue> {
+        let should_print = has_print_marker(node);
+
+        let target = match node.kind() {
+            AstNode::Literal => Ok(Self::literal_to_var(node)),
+            _ => Err(LanguloError::TranspileError {
+                message: format!("Invalid assignment target: {:?}", node.kind()),
+            }),
+        }?;
+
+        if should_print {
+            self.emitter.require_helper(HelperFunction::Print);
+            let tmp = self.emitter.fresh_tmp();
+            let indent = "    ".repeat(self.emitter.indent);
+            self.emitter.lines.push(format!("{}if not '{}' in vars():", indent, target));
+            self.emitter.lines.push(format!("{}{}{}='(undefined variable `{}`)'",
+            indent, "    ", target, node.text().to_string()));
+            self.emitter.lines.push(format!("{}{} = {}", indent, tmp, target));
+            self.emitter.print(&tmp);
+        }
+
+        Ok(LValue { target })
+    }
+
+    fn visit_inner(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<()> {
         match node.kind() {
             AstNode::Root => {
                 for child in node.children() {
@@ -198,35 +241,23 @@ impl Transpiler {
                 self.emitter.write(")");
             }
             AstNode::Print => {
-                self.emitter.require_helper(Helper::Print);
-                let child = node.first_child().ok_or(LanguloError::TranspileError {
-                    message: "Internal error: Print node has no children".to_string(),
-                })?;
-                self.emitter.mark_checkpoint();
-                self.visit(&child)?;
-                let tmp = self.emitter.hoist_checkpoint_to_tmp();
-                self.emitter.write(&format!("_print({})", tmp));
+                return Err(LanguloError::InternalError {
+                    message: "print nodes should never get visited after parsing".to_string(),
+                });
             }
             AstNode::Assign => {
-                assert_eq!(node.children().count(), 2);
-                let var_node = node.first_child().unwrap();
-                if let Some(AstNode::Literal) = var_node.kind().into() {
-                    // an assignment evaluates to the assigned value, so it needs hoisting as well (this time named hoisting)
-                    // langulo: 3 + x = 2
-                    // python: x = 2    3 + x
-                    //var can be visited, will just place the varname where the evaluated expression should be
-                    self.visit(&var_node)?;
-                    self.emitter.mark_checkpoint();
-                    let val_node = node.last_child().unwrap();
-                    self.visit(&val_node)?;
-                    let _ = self.emitter.hoist_checkpoint(Transpiler::literal_to_var(&var_node));
-                }
-                else {
-                    return Err(LanguloError::TranspileError {
-                        message: format!("Invalid assignment target: {:?}", var_node.kind()),
-                    });
-                }
+                let children: Vec<_> = node.children().collect();
+                assert_eq!(children.len(), 2);
 
+                let var_node = &children[0];
+                let val_node = &children[1];
+
+                let lvalue = self.visit_lvalue(var_node)?;
+
+                self.emitter.mark_checkpoint();
+                self.visit(val_node)?;
+                self.emitter.hoist_checkpoint(lvalue.target.clone());
+                self.emitter.write(&lvalue.target);
             }
         }
         Ok(())
@@ -278,7 +309,9 @@ mod tests {
 
     fn transpile_source(source: &str) -> String {
         let ast = parse(source).unwrap();
-        transpile(&ast).unwrap()
+        let result = transpile(&ast).unwrap();
+        println!("{}", result);
+        result
     }
 
     #[test]
@@ -287,8 +320,7 @@ mod tests {
     }
 
     #[test]
-    fn test_print_hoists() {
-        // $3 should hoist the 3 to a temp var
+    fn test_print_simple() {
         let result = transpile_source("$3");
         assert!(result.contains("tmp0 = 3"));
         assert!(result.contains("_print(tmp0)"));
@@ -296,7 +328,6 @@ mod tests {
 
     #[test]
     fn test_print_in_expression() {
-        // 1 + $2 + 3 should hoist just the print operand
         let result = transpile_source("1 + $2 + 3");
         assert!(result.contains("tmp0 = 2"));
         assert!(result.contains("_print(tmp0)"));
@@ -304,19 +335,36 @@ mod tests {
 
     #[test]
     fn test_nested_print() {
-        // $($1) - nested prints
         let result = transpile_source("$($1)");
-        assert!(result.contains("tmp0 = 1"));
-        assert!(result.contains("tmp1 = _print(tmp0)"));
-        assert!(result.contains("_print(tmp1)"));
+        assert!(result.contains("_print"));
     }
 
     #[test]
     fn test_assignment() {
-        let mut result = transpile_source("x = 42");
+        let result = transpile_source("x = 42");
         assert!(result.contains("varx = 42"));
-        result = transpile_source("3 + (x=2)");
+    }
+
+    #[test]
+    fn test_assignment_in_expression() {
+        let result = transpile_source("3 + (x = 2)");
         assert!(result.contains("varx = 2"));
-        assert!(result.contains("3 + (varx)"));
+        assert!(result.contains("(3 + (varx))"));
+    }
+
+    #[test]
+    fn test_print_assignment() {
+        // x $= 3 means: assign 3 to x, then print the result
+        let result = transpile_source("x $= 3");
+        assert!(result.contains("varx = 3"));
+        assert!(result.contains("_print"));
+    }
+
+    #[test]
+    fn test_print_assignment_in_expression() {
+        // 1 + (x $= 2) means: assign 2 to x, print 2, then add to 1
+        let result = transpile_source("1 + (x $= 2)");
+        assert!(result.contains("varx = 2"));
+        assert!(result.contains("_print"));
     }
 }

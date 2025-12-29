@@ -314,10 +314,16 @@ mod tests {
 
     #[test]
     fn assignments() {
-        assert_eq!(eval_langulo_display("x = 2"), "2");
-        assert_eq!(eval_langulo_display("x"), "2");
-        assert_eq!(eval_langulo_display("3 + (x=4)"), "7");
-        assert_eq!(eval_langulo_display("x"), "4");
+        assert_eq!(eval_langulo_display("y = 2"), "2");
+        assert_eq!(eval_langulo_display("y"), "2");
+        assert_eq!(eval_langulo_display("3 + (y=4)"), "7");
+        assert_eq!(eval_langulo_display("y"), "4");
+    }
 
+    #[test]
+    fn print_assignment() {
+        assert_eq!(eval_langulo_display("x $= 1+2"), "3");
+        assert_eq!(eval_langulo_display("x"), "3");
+        assert_eq!(eval_langulo_display("$x = 44"), "44");
     }
 }

@@ -2,8 +2,8 @@ use crate::errors::LanguloError;
 use crate::errors::LanguloResult;
 use crate::lexer::Tok;
 use crate::parser::AstNode::Root;
-use logos::{Lexer, Source};
-use rowan::{Checkpoint, SyntaxNode};
+use logos::Lexer;
+use rowan::{Checkpoint, GreenNodeBuilder, NodeOrToken, SyntaxNode};
 use std::iter::Peekable;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -12,18 +12,18 @@ pub enum AstNode {
     Root = u16::MAX,
     // values
     Num = 0,
+    Bool,
+    Literal,
     Grouping,
-    //unary
+    // binary
     Add,
     Subtract,
     Multiply,
     Divide,
     Modulo,
     Power,
-    Bool,
     And,
     Or,
-    Not,
     Xor,
     Eq,
     Neq,
@@ -31,9 +31,10 @@ pub enum AstNode {
     Geq,
     Lt,
     Gt,
-    Print,
     Assign,
-    Literal,
+    // unary prefix
+    Not,
+    Print,
 }
 
 // plumbing for rowan
@@ -123,6 +124,43 @@ impl Tok<'_> {
     }
 }
 
+fn flatten_print_nodes(root: LanguloSyntaxNode) -> LanguloSyntaxNode {
+    let mut builder = GreenNodeBuilder::new();
+    flatten_recursive(&root, &mut builder, false);
+    SyntaxNode::new_root(builder.finish())
+}
+
+fn flatten_recursive(node: &LanguloSyntaxNode, builder: &mut GreenNodeBuilder, add_marker: bool) {
+    if node.kind() == AstNode::Print {
+        assert_eq!(node.children().count(), 1);
+        if let Some(child) = node.first_child() {
+            flatten_recursive(&child, builder, true);
+        }
+    } else {
+        builder.start_node(node.kind().into());
+
+        if add_marker {
+            builder.token(AstNode::Print.into(), "");
+        }
+
+        for child in node.children_with_tokens() {
+            match child {
+                NodeOrToken::Node(n) => flatten_recursive(&n, builder, false),
+                NodeOrToken::Token(t) => builder.token(t.kind().into(), t.text()),
+            }
+        }
+
+        builder.finish_node();
+    }
+}
+
+pub fn has_print_marker(node: &LanguloSyntaxNode) -> bool {
+    use rowan::NodeOrToken;
+    node.children_with_tokens().any(|child| {
+        matches!(child, NodeOrToken::Token(tok) if tok.kind() == AstNode::Print)
+    })
+}
+
 pub struct Parser<'src> {
     source: &'src str,
     lexer: Peekable<Lexer<'src, Tok<'src>>>,
@@ -134,7 +172,8 @@ pub fn parse(source: &str) -> LanguloResult<LanguloSyntaxNode> {
     let mut parser = Parser::new(source);
     parser.parse_root()?;
     let ast = parser.ast_builder.finish();
-    Ok(SyntaxNode::new_root(ast))
+    let raw_tree = SyntaxNode::new_root(ast);
+    Ok(flatten_print_nodes(raw_tree))
 }
 
 impl<'src> Parser<'src> {
@@ -188,6 +227,7 @@ impl<'src> Parser<'src> {
 
     fn parse_expr(&mut self, precedence: u8) -> LanguloResult<()> {
         let checkpoint = self.ast_builder.checkpoint();
+
         self.parse_prefix()?;
 
         loop {
@@ -198,7 +238,7 @@ impl<'src> Parser<'src> {
             if next_precedence <= precedence {
                 break;
             }
-            self.parse_infix(checkpoint, next_precedence)?;
+            self.parse_infix(checkpoint, next_precedence, false)?;
         }
         Ok(())
     }
@@ -234,7 +274,7 @@ impl<'src> Parser<'src> {
         self.ast_builder.finish_node();
     }
 
-    fn parse_infix(&mut self, checkpoint: Checkpoint, precedence: u8) -> LanguloResult<()> {
+    fn parse_infix(&mut self, checkpoint: Checkpoint, precedence: u8, cond: bool) -> LanguloResult<()> {
         let tok = self.next_token()?;
         match tok {
             Tok::Plus => self.add_binary_node(AstNode::Add, checkpoint, precedence)?,
@@ -253,6 +293,22 @@ impl<'src> Parser<'src> {
             Tok::Geq(_) => self.add_binary_node(AstNode::Geq, checkpoint, precedence)?,
             Tok::Leq(_) => self.add_binary_node(AstNode::Leq, checkpoint, precedence)?,
             Tok::Assign => self.add_binary_node(AstNode::Assign, checkpoint, precedence)?,
+            Tok::Dollar => {
+                if !cond {
+                    // print operand can also act on infix operands themselves
+                    self.ast_builder.start_node_at(checkpoint, AstNode::Print.into());
+                    let next_precedence = match self.peek_token()? {
+                        Some(tok) => tok.precedence(),
+                        None => return Err(LanguloError::UnexpectedToken {
+                            token: "end of file".into(),
+                            src: self.source.into(),
+                            span: (self.current_offset, 1).into(),
+                        }),
+                    };
+                    self.parse_infix(checkpoint, next_precedence, true)?;
+                    self.ast_builder.finish_node();
+                }
+            }
             _ => {
                 return Err(LanguloError::UnexpectedToken {
                     token: tok.info(),
@@ -324,26 +380,25 @@ mod tests {
     use super::*;
     use crate::parser::AstNode::*;
 
-    fn print_ast(source: &str) {
-        let root = parse(source).unwrap();
-        root.descendants().for_each(|node| println!("{:?}", node));
+    #[derive(Default)]
+    struct AstExpectation<'a> {
+        source: &'a str,
+        nodes: &'a [AstNode],
+        children: &'a [&'a [usize]],
+        print_markers: &'a [usize],
     }
 
-    fn expect_ast(source: &str, expected_nodes_tree_lexicographic_order: &[AstNode]) {
-        expect_ast_with_children(source, expected_nodes_tree_lexicographic_order, &[]);
-    }
-
-    fn expect_ast_with_children(
-        source: &str,
-        expected_nodes_tree_lexicographic_order: &[AstNode],
-        children_assertions: &[&[usize]],
-    ) {
-        let root = parse(source).unwrap();
+    fn expect_ast(exp: AstExpectation) {
+        let root = parse(exp.source).unwrap();
         let nodes: Vec<_> = root.descendants().collect();
         let actual_nodes: Vec<_> = nodes.iter().map(|node| node.kind()).collect();
-        assert_eq!(actual_nodes, expected_nodes_tree_lexicographic_order);
 
-        for assertion in children_assertions {
+        assert_eq!(
+            actual_nodes, exp.nodes,
+            "AST node mismatch for '{}'", exp.source
+        );
+
+        for assertion in exp.children {
             if assertion.is_empty() {
                 continue;
             }
@@ -361,59 +416,140 @@ mod tests {
                 nodes[parent_idx].kind()
             );
         }
+
+        for (idx, node) in nodes.iter().enumerate() {
+            let should_have_marker = exp.print_markers.contains(&idx);
+            let has_marker = has_print_marker(node);
+            assert_eq!(
+                has_marker,
+                should_have_marker,
+                "Node at index {} ({:?}): expected print_marker={}, got {}",
+                idx,
+                node.kind(),
+                should_have_marker,
+                has_marker
+            );
+        }
     }
 
     #[test]
     fn test_arithmetic() {
-        print_ast("1 + 2 * 3");
-        expect_ast("1 + 2 * 3", &[Root, Add, Num, Multiply, Num, Num]);
-        expect_ast("2 ^ 3 ^ 2", &[Root, Power, Power, Num, Num, Num]);
-        expect_ast_with_children(
-            "1 + 2 * 3 - 4 / 2",
-            &[
-                Root, Subtract, Add, Num, Multiply, Num, Num, Divide, Num, Num,
-            ],
-            &[
-                &[1, 2, 7],
-                &[2, 3, 4],
-                &[4, 5, 6],
-                &[7, 8, 9],
-            ],
-        );
+        expect_ast(AstExpectation {
+            source: "1 + 2 * 3",
+            nodes: &[Root, Add, Num, Multiply, Num, Num],
+            ..Default::default()
+        });
+
+        expect_ast(AstExpectation {
+            source: "2 ^ 3 ^ 2",
+            nodes: &[Root, Power, Power, Num, Num, Num],
+            ..Default::default()
+        });
+
+        expect_ast(AstExpectation {
+            source: "1 + 2 * 3 - 4 / 2",
+            nodes: &[Root, Subtract, Add, Num, Multiply, Num, Num, Divide, Num, Num],
+            children: &[&[1, 2, 7], &[2, 3, 4], &[4, 5, 6], &[7, 8, 9]],
+            ..Default::default()
+        });
     }
 
     #[test]
     fn test_comments() {
-        expect_ast(
-            "1 //- ignored -// + 2 * 3 //also ignored",
-            &[Root, Add, Num, Multiply, Num, Num],
-        );
+        expect_ast(AstExpectation {
+            source: "1 //- ignored -// + 2 * 3 //also ignored",
+            nodes: &[Root, Add, Num, Multiply, Num, Num],
+            ..Default::default()
+        });
     }
 
     #[test]
     fn test_grouping() {
-        expect_ast_with_children(
-            "2 * ($3 - 1)",
-            &[Root, Multiply, Num, Grouping, Subtract, Print, Num, Num],
-            &[&[1, 2, 3], &[3, 4], &[4, 5, 7], &[5, 6]],
-        )
+        expect_ast(AstExpectation {
+            source: "2 * (3 - 1)",
+            nodes: &[Root, Multiply, Num, Grouping, Subtract, Num, Num],
+            children: &[&[1, 2, 3], &[3, 4], &[4, 5, 6]],
+            ..Default::default()
+        });
     }
 
     #[test]
     fn test_booleans() {
-        expect_ast_with_children(
-            "not true and false xor true",
-            &[Root, Xor, And, Not, Bool, Bool, Bool],
-            &[&[1, 2, 6], &[2, 3, 5], &[3, 4]],
-        )
+        expect_ast(AstExpectation {
+            source: "not true and false xor true",
+            nodes: &[Root, Xor, And, Not, Bool, Bool, Bool],
+            children: &[&[1, 2, 6], &[2, 3, 5], &[3, 4]],
+            ..Default::default()
+        });
     }
 
     #[test]
     fn test_assign() {
-        expect_ast_with_children(
-            "x = 5",
-            &[Root, Assign, Literal, Num],
-            &[&[1, 2, 3]],
-        )
+        expect_ast(AstExpectation {
+            source: "x = 5",
+            nodes: &[Root, Assign, Literal, Num],
+            children: &[&[1, 2, 3]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_print_prefix_simple() {
+        expect_ast(AstExpectation {
+            source: "$3",
+            nodes: &[Root, Num],
+            print_markers: &[1],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_print_prefix_in_expression() {
+        expect_ast(AstExpectation {
+            source: "1 + $2 + 3",
+            nodes: &[Root, Add, Add, Num, Num, Num],
+            print_markers: &[4],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_print_on_grouped_assignment() {
+        expect_ast(AstExpectation {
+            source: "$(x = 3)",
+            nodes: &[Root, Grouping, Assign, Literal, Num],
+            print_markers: &[1],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_print_on_rhs_of_assignment() {
+        expect_ast(AstExpectation {
+            source: "x = $3",
+            nodes: &[Root, Assign, Literal, Num],
+            print_markers: &[3],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_nested_print() {
+        expect_ast(AstExpectation {
+            source: "$$3",
+            nodes: &[Root, Num],
+            print_markers: &[1],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_print_on_other_operands() {
+        expect_ast(AstExpectation {
+            source: "x $= 1",
+            nodes: &[Root, Assign, Literal, Num],
+            print_markers: &[1],
+            ..Default::default()
+        });
     }
 }

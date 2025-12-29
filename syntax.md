@@ -3,13 +3,22 @@
 ## PRINT
 
 ```
-// <$expr> prints the expr right after it to stdout and evaluates to expr
+// $ is a printing operator.
 $2
 $2 + 3 // still prints 2
 $(2 + 3) // now prints 5
-n = $(2 + 3) // prints 5 and sets n to 5. 
-// in practice, to quickly print an assignment you would usually write
-// $n = 2 + 3
+
+// $ is pretty powerful in that it can be used not only on values, but on other operators too.
+2 $+ 3 // equivalent to the previous expression
+n $= 2 + 3 // easy way to debug what gets assigned
+
+//- 
+in the situation below, $n is both interpreted as an lvalue for the purposes of the assignment,
+and as an rvalue with respect to getting printed.
+that is to say, if n is already instantiated, its previous value will get printed.
+-//
+$n = 3 + 4 // prints 5
+$new = 2 // prints (undefined variable `new`)
 ```
 
 ## NUMBERS

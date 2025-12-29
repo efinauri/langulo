@@ -151,7 +151,13 @@ mod tests {
 
     /// Helper: transpile and evaluate, return the display string
     fn eval_langulo_display(source: &str) -> String {
-        eval_langulo(source).unwrap().display
+        let result = eval_langulo(source).unwrap().display;
+        // Simplify function representation
+        if result.starts_with("<function") {
+            "<function>".to_string()
+        } else {
+            result
+        }
     }
 
     // ===================
@@ -325,5 +331,143 @@ mod tests {
         assert_eq!(eval_langulo_display("x $= 1+2"), "3");
         assert_eq!(eval_langulo_display("x"), "3");
         assert_eq!(eval_langulo_display("$x = 44"), "44");
+    }
+
+    #[test]
+    fn function_definition() {
+        // Define a simple function
+        assert_eq!(eval_langulo_display("double = |x| x * 2"), "<function>");
+        assert_eq!(eval_langulo_display("double(5)"), "10");
+        assert_eq!(eval_langulo_display("double(3)"), "6");
+    }
+
+    #[test]
+    fn function_two_params() {
+        assert_eq!(eval_langulo_display("add = |a, b| a + b"), "<function>");
+        assert_eq!(eval_langulo_display("add(1, 2)"), "3");
+        assert_eq!(eval_langulo_display("add(10, 20)"), "30");
+    }
+
+    #[test]
+    fn function_no_params() {
+        assert_eq!(eval_langulo_display("always_five = || 5"), "<function>");
+        assert_eq!(eval_langulo_display("always_five()"), "5");
+    }
+
+    #[test]
+    fn function_complex_body() {
+        assert_eq!(
+            eval_langulo_display("calc = |x, y| (x + y) * 2"),
+            "<function>"
+        );
+        assert_eq!(eval_langulo_display("calc(3, 4)"), "14");
+    }
+
+    #[test]
+    fn function_nested_calls() {
+        assert_eq!(eval_langulo_display("inc = |x| x + 1"), "<function>");
+        assert_eq!(eval_langulo_display("dec = |x| x - 1"), "<function>");
+        assert_eq!(eval_langulo_display("inc(dec(5))"), "5");
+        assert_eq!(eval_langulo_display("inc(inc(inc(0)))"), "3");
+    }
+
+    #[test]
+    fn function_in_expression() {
+        assert_eq!(eval_langulo_display("square = |x| x * x"), "<function>");
+        assert_eq!(eval_langulo_display("1 + square(3) + 2"), "12");
+        assert_eq!(eval_langulo_display("square(2) * square(3)"), "36");
+    }
+
+    #[test]
+    fn postfix_call_simple() {
+        assert_eq!(eval_langulo_display("double = |@| @ * 2"), "<function>");
+        assert_eq!(eval_langulo_display("5 @ double()"), "10");
+        assert_eq!(eval_langulo_display("3 @ double()"), "6");
+    }
+
+    #[test]
+    fn postfix_call_with_args() {
+        assert_eq!(eval_langulo_display("plus = |@, n| @ + n"), "<function>");
+        assert_eq!(eval_langulo_display("3 @ plus(2)"), "5");
+        assert_eq!(eval_langulo_display("10 @ plus(5)"), "15");
+    }
+
+    #[test]
+    fn postfix_call_chained() {
+        assert_eq!(eval_langulo_display("inc = |@| @ + 1"), "<function>");
+        assert_eq!(eval_langulo_display("double = |@| @ * 2"), "<function>");
+        assert_eq!(eval_langulo_display("0 @ inc() @ inc() @ inc()"), "3");
+        assert_eq!(eval_langulo_display("2 @ double() @ double()"), "8");
+        assert_eq!(eval_langulo_display("1 @ inc() @ double()"), "4");
+    }
+
+    #[test]
+    fn postfix_call_mixed_styles() {
+        assert_eq!(eval_langulo_display("add = |a, b| a + b"), "<function>");
+        assert_eq!(eval_langulo_display("inc = |@| @ + 1"), "<function>");
+        // Mix prefix and postfix calls
+        assert_eq!(eval_langulo_display("add(1, 2) @ inc()"), "4");
+        assert_eq!(eval_langulo_display("5 @ inc() + 10"), "16");
+    }
+
+    #[test]
+    fn function_with_print() {
+        assert_eq!(eval_langulo_display("f = |x| $x + 1"), "<function>");
+        // When called, $x should print x and return x+1
+        assert_eq!(eval_langulo_display("f(5)"), "6");
+    }
+
+    #[test]
+    fn function_closure_behavior() {
+        // Functions should capture variables from outer scope
+        assert_eq!(eval_langulo_display("multiplier = 3"), "3");
+        assert_eq!(
+            eval_langulo_display("scale = |x| x * multiplier"),
+            "<function>"
+        );
+        assert_eq!(eval_langulo_display("scale(4)"), "12");
+    }
+
+    #[test]
+    fn function_as_argument() {
+        assert_eq!(
+            eval_langulo_display("apply_twice = |f, x| f(f(x))"),
+            "<function>"
+        );
+        assert_eq!(eval_langulo_display("inc = |x| x + 1"), "<function>");
+        assert_eq!(eval_langulo_display("apply_twice(inc, 0)"), "2");
+    }
+
+    #[test]
+    fn function_returning_function() {
+        assert_eq!(
+            eval_langulo_display("make_adder = |n| |x| x + n"),
+            "<function>"
+        );
+        assert_eq!(eval_langulo_display("addfive = make_adder(5)"), "<function>");
+        assert_eq!(eval_langulo_display("addfive(10)"), "15");
+    }
+
+    #[test]
+    fn postfix_with_expression_arg() {
+        assert_eq!(eval_langulo_display("plus = |@, n| @ + n"), "<function>");
+        assert_eq!(eval_langulo_display("3 @ plus(1 + 1)"), "5");
+        assert_eq!(eval_langulo_display("(1 + 2) @ plus(3 * 2)"), "9");
+    }
+
+    #[test]
+    fn function_boolean_operations() {
+        assert_eq!(
+            eval_langulo_display("is_positive = |x| x > 0"),
+            "<function>"
+        );
+        assert_eq!(eval_langulo_display("is_positive(5)"), "True");
+        assert_eq!(eval_langulo_display("is_positive(-3)"), "False");
+        assert_eq!(
+            eval_langulo_display("both_positive = |a, b| a > 0 and b > 0"),
+            "<function>"
+        );
+        assert_eq!(eval_langulo_display("both_positive(1, 2)"), "True");
+        assert_eq!(eval_langulo_display("both_positive(1, -1)"), "False");
     }
 }

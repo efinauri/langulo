@@ -329,6 +329,55 @@ impl Transpiler {
                     message: "FunctionParams/FunctionBody should not be visited directly"
                         .to_string(),
                 });
+            },
+            AstNode::PrefixFnCall => {
+                let children: Vec<_> = node.children().collect();
+                let func = &children[0];
+                let args = &children[1];
+
+                self.visit(func)?;
+                self.emitter.write("(");
+
+                let arg_exprs: Vec<_> = args.children().collect();
+                for (i, arg) in arg_exprs.iter().enumerate() {
+                    if i > 0 {
+                        self.emitter.write(", ");
+                    }
+                    self.visit(arg)?;
+                }
+
+                self.emitter.write(")");
+            }
+            AstNode::PostfixFnCall => {
+                let children: Vec<_> = node.children().collect();
+                let at_value = &children[0];
+                let call = &children[1];
+
+                // call is a FunctionCall with children[0]=func, children[1]=args
+                let call_children: Vec<_> = call.children().collect();
+                let func = &call_children[0];
+                let args = &call_children[1];
+
+                self.visit(func)?;
+                self.emitter.write("(");
+
+                // First arg is the @ value
+                self.visit(at_value)?;
+
+                // Then the rest of the args
+                let arg_exprs: Vec<_> = args.children().collect();
+                for arg in arg_exprs.iter() {
+                    self.emitter.write(", ");
+                    self.visit(arg)?;
+                }
+
+                self.emitter.write(")");
+            }
+
+            AstNode::CallArgs => {
+                return Err(LanguloError::InternalError {
+                    message: "CallArgs should not be visited directly".to_string(),
+                });
             }
         }
         Ok(())
@@ -516,10 +565,10 @@ mod tests {
     }
 
     #[test]
-    fn test_function_with_self() {
+    fn test_function_withvarself() {
         let result = transpile_source("plus = |@, other| @ + other");
-        assert!(result.contains("def tmp0(_self, varother):"));
-        assert!(result.contains("return (_self + varother)"));
+        assert!(result.contains("def tmp0(varself, varother):"));
+        assert!(result.contains("return (varself + varother)"));
         assert!(result.contains("varplus = tmp0"));
     }
 
@@ -527,7 +576,7 @@ mod tests {
     fn test_function_complex_body() {
         let result = transpile_source("calc = |x, y| (x + y) * 2");
         assert!(result.contains("def tmp0(varx, vary):"));
-        assert!(result.contains("return ((varx + vary) * 2)"));
+        assert!(result.contains("return (((varx + vary)) * 2)"));
         assert!(result.contains("varcalc = tmp0"));
     }
 
@@ -538,5 +587,34 @@ mod tests {
         assert!(result.contains("def tmp0(varx):"));
         assert!(result.contains("return varx"));
         assert!(result.contains("varf = tmp0"));
+    }
+    //////////////
+    // fn calls //
+    //////////////
+
+    #[test]
+    fn test_function_call_transpile() {
+        let result = transpile_source("add(1, 2)");
+        assert!(result.contains("varadd(1, 2)"));
+    }
+
+    #[test]
+    fn test_postfix_call_transpile() {
+        let result = transpile_source("3 @ plus(2)");
+        assert!(result.contains("varplus(3, 2)"));
+    }
+
+    #[test]
+    fn test_postfix_call_no_extra_args() {
+        let result = transpile_source("5 @ double()");
+        assert!(result.contains("vardouble(5)"));
+    }
+
+    #[test]
+    fn test_define_and_call() {
+        let result = transpile_source("add = |a, b| a + b");
+        assert!(result.contains("def tmp0(vara, varb):"));
+        assert!(result.contains("return (vara + varb)"));
+        assert!(result.contains("varadd = tmp0"));
     }
 }

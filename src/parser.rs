@@ -39,6 +39,9 @@ pub enum AstNode {
     FunctionDecl,
     FunctionParams,
     FunctionBody,
+    PrefixFnCall,
+    PostfixFnCall,
+    CallArgs,
 }
 
 // plumbing for rowan
@@ -75,7 +78,6 @@ impl Tok<'_> {
             | Tok::Whitespace(_)
             | Tok::BlockComment(_)
             | Tok::LineComment(_)
-            | Tok::LParen
             | Tok::RParen
             | Tok::Comma
             | Tok::Pipe
@@ -92,6 +94,7 @@ impl Tok<'_> {
             Tok::Caret => 0b_1000_0000,
             Tok::Dollar => 0b_1100_0000,
             Tok::At => 0b_1110_0000,
+            Tok::LParen => 0b_1111_0000, // for fn calls
         }
     }
 }
@@ -260,22 +263,29 @@ impl<'src> Parser<'src> {
             Tok::Literal(value) => self.add_leaf_node(AstNode::Literal, value),
             Tok::True(value) | Tok::False(value) => self.add_leaf_node(AstNode::Bool, value),
             Tok::At => self.add_leaf_node(AstNode::Literal, "@"),
+            Tok::Not(_) => self.add_unary_node_prefix(AstNode::Not, tok.precedence())?,
+            Tok::Dollar => self.add_unary_node_prefix(AstNode::Print, tok.precedence())?,
             Tok::LParen => {
                 self.ast_builder.start_node(AstNode::Grouping.into());
                 self.parse_expr(0)?;
                 self.require_specific_tok(Tok::RParen)?;
                 self.ast_builder.finish_node();
             }
-            Tok::Not(_) => self.add_unary_node_prefix(AstNode::Not, tok.precedence())?,
-            Tok::Dollar => self.add_unary_node_prefix(AstNode::Print, tok.precedence())?,
             Tok::Pipe => self.parse_function_declaration()?,
+            Tok::Minus => { // desugar -3 into -1*3
+                self.ast_builder.start_node(AstNode::Multiply.into());
+                self.add_leaf_node(AstNode::Num, "-1");
+                self.parse_expr(Tok::Star.precedence())?;
+                self.ast_builder.finish_node();
+            },
+
             _ => {
                 return Err(LanguloError::UnexpectedToken {
                     token: tok.info(),
                     src: self.source.into(),
                     span: (self.current_offset, tok.len()).into(),
                 });
-            }
+            },
         }
         Ok(())
     }
@@ -320,6 +330,18 @@ impl<'src> Parser<'src> {
                     self.parse_infix(checkpoint, next_precedence, true)?;
                     self.ast_builder.finish_node();
                 }
+            }
+            Tok::LParen => {
+                // Function call: expr(args)
+                self.ast_builder.start_node_at(checkpoint, AstNode::PrefixFnCall.into());
+                self.parse_call_args()?;
+                self.ast_builder.finish_node();
+            }
+            Tok::At => {
+                // Postfix call: value @ func(args)
+                self.ast_builder.start_node_at(checkpoint, AstNode::PostfixFnCall.into());
+                self.parse_expr(precedence)?;
+                self.ast_builder.finish_node();
             }
             _ => {
                 return Err(LanguloError::UnexpectedToken {
@@ -432,6 +454,38 @@ impl<'src> Parser<'src> {
         self.ast_builder.finish_node();
         Ok(())
     }
+
+    fn parse_call_args(&mut self) -> LanguloResult<()> {
+        self.ast_builder.start_node(AstNode::CallArgs.into());
+
+        if let Some(Tok::RParen) = self.peek_token()? {
+            self.next_token()?;
+            self.ast_builder.finish_node();
+            return Ok(());
+        }
+        loop {
+            self.parse_expr(0)?;
+            match self.peek_token()? {
+                Some(Tok::Comma) => {
+                    self.next_token()?;
+                }
+                Some(Tok::RParen) => {
+                    self.next_token()?;
+                    break;
+                }
+                _ => {
+                    return Err(LanguloError::UnexpectedToken {
+                        token: "expected ',' or ')'".into(),
+                        src: self.source.into(),
+                        span: (self.current_offset, 1).into(),
+                    });
+                }
+            }
+        }
+
+        self.ast_builder.finish_node();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -509,6 +563,48 @@ mod tests {
             source: "1 + 2 * 3 - 4 / 2",
             nodes: &[Root, Subtract, Add, Num, Multiply, Num, Num, Divide, Num, Num],
             children: &[&[1, 2, 7], &[2, 3, 4], &[4, 5, 6], &[7, 8, 9]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_unary_negation() {
+        expect_ast(AstExpectation {
+            source: "-3",
+            nodes: &[Root, Multiply, Num, Num],
+            children: &[&[1, 2, 3]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_negation_in_expression() {
+        // -3 + 4 should be ((-1 * 3) + 4)
+        expect_ast(AstExpectation {
+            source: "-3 + 4",
+            nodes: &[Root, Add, Multiply, Num, Num, Num],
+            children: &[&[1, 2, 5], &[2, 3, 4]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_negation_in_call() {
+        expect_ast(AstExpectation {
+            source: "foo(-3)",
+            nodes: &[Root, PrefixFnCall, Literal, CallArgs, Multiply, Num, Num],
+            children: &[&[1, 2, 3], &[3, 4], &[4, 5, 6]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_double_negation() {
+        // --3 should be (-1) * ((-1) * 3)
+        expect_ast(AstExpectation {
+            source: "--3",
+            nodes: &[Root, Multiply, Num, Multiply, Num, Num],
+            children: &[&[1, 2, 3], &[3, 4, 5]],
             ..Default::default()
         });
     }
@@ -611,7 +707,10 @@ mod tests {
             ..Default::default()
         });
     }
-
+    /////////////
+    // fn decl //
+    /////////////
+    
     #[test]
     fn test_function_simple() {
         expect_ast(AstExpectation {
@@ -638,6 +737,92 @@ mod tests {
             source: "||42",
             nodes: &[Root, FunctionDecl, FunctionParams, FunctionBody, Num],
             children: &[&[1, 2, 3], &[3, 4]],
+            ..Default::default()
+        });
+    }
+    //////////////
+    // fn calls //
+    //////////////
+
+    #[test]
+    fn test_function_call_no_args() {
+        expect_ast(AstExpectation {
+            source: "foo()",
+            nodes: &[Root, PrefixFnCall, Literal, CallArgs],
+            children: &[&[1, 2, 3]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_function_call_one_arg() {
+        expect_ast(AstExpectation {
+            source: "foo(1)",
+            nodes: &[Root, PrefixFnCall, Literal, CallArgs, Num],
+            children: &[&[1, 2, 3], &[3, 4]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_function_call_two_args() {
+        expect_ast(AstExpectation {
+            source: "add(1, 2)",
+            nodes: &[Root, PrefixFnCall, Literal, CallArgs, Num, Num],
+            children: &[&[1, 2, 3], &[3, 4, 5]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_function_call_complex_args() {
+        expect_ast(AstExpectation {
+            source: "foo(1 + 2, 3 * 4)",
+            nodes: &[Root, PrefixFnCall, Literal, CallArgs, Add, Num, Num, Multiply, Num, Num],
+            children: &[&[1, 2, 3], &[3, 4, 7], &[4, 5, 6], &[7, 8, 9]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_postfix_call_simple() {
+        // 3 @ plus(2) -> PostfixFnCall(Num(3), PrefixFnCall(plus, CallArgs(2)))
+        expect_ast(AstExpectation {
+            source: "3 @ plus(2)",
+            nodes: &[Root, PostfixFnCall, Num, PrefixFnCall, Literal, CallArgs, Num],
+            children: &[&[1, 2, 3], &[3, 4, 5], &[5, 6]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_postfix_call_no_extra_args() {
+        // 3 @ double() -> PostfixFnCall(Num(3), PrefixFnCall(double, CallArgs))
+        expect_ast(AstExpectation {
+            source: "3 @ double()",
+            nodes: &[Root, PostfixFnCall, Num, PrefixFnCall, Literal, CallArgs],
+            children: &[&[1, 2, 3], &[3, 4, 5]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_postfix_call_chained() {
+        // 3 @ plus(2) @ times(4)
+        expect_ast(AstExpectation {
+            source: "3 @ plus(2) @ times(4)",
+            nodes: &[Root, PostfixFnCall, PostfixFnCall, Num, PrefixFnCall, Literal, CallArgs, Num, PrefixFnCall, Literal, CallArgs, Num],
+            children: &[&[1, 2, 8], &[2, 3, 4], &[4, 5, 6], &[6, 7], &[8, 9, 10], &[10, 11]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_function_call_in_expression() {
+        expect_ast(AstExpectation {
+            source: "1 + foo(2) * 3",
+            nodes: &[Root, Add, Num, Multiply, PrefixFnCall, Literal, CallArgs, Num, Num],
+            children: &[&[1, 2, 3], &[3, 4, 8], &[4, 5, 6], &[6, 7]],
             ..Default::default()
         });
     }

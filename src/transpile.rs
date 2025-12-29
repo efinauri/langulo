@@ -1,7 +1,6 @@
 use crate::errors::{LanguloError, LanguloResult};
-use crate::parser::{has_print_marker, AstNode, LanguloSyntaxNode};
+use crate::parser::{AstNode, LanguloSyntaxNode, has_print_marker};
 use std::collections::HashSet;
-use std::fmt::format;
 use std::string::ToString;
 
 const TMP_VAR_NAME: &'static str = "tmp";
@@ -10,16 +9,6 @@ pub fn transpile(ast: &LanguloSyntaxNode) -> LanguloResult<String> {
     let mut transpiler = Transpiler::new();
     transpiler.visit(ast)?;
     Ok(transpiler.finish())
-}
-
-struct PythonEmitter {
-    lines: Vec<String>,
-    current_line: String,
-    indent: usize,
-    helpers: HashSet<HelperFunction>,
-    tmp_counter: usize,
-    /// an index of current_line marked for future modification
-    checkpoints: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -35,16 +24,36 @@ impl HelperFunction {
     }
 }
 
-struct LValue {
-    /// like varx, varx[1], etc.
-    target: String,
+struct Scope {
+    lines: Vec<String>,
+    current_line: String,
+    checkpoints: Vec<usize>,
+}
+
+impl Scope {
+    fn new() -> Self {
+        Self {
+            lines: Vec::new(),
+            current_line: String::new(),
+            checkpoints: Vec::new(),
+        }
+    }
+}
+
+struct PythonEmitter {
+    scopes: Vec<Scope>,
+    indent: usize,
+    helpers: HashSet<HelperFunction>,
+    /// a counter to make sure that generated variables/function names are unique
+    tmp_counter: usize,
+    /// an index of current_line marked for future modification
+    checkpoints: Vec<usize>,
 }
 
 impl PythonEmitter {
     fn new() -> Self {
         Self {
-            lines: Vec::new(),
-            current_line: String::new(),
+            scopes: vec![Scope::new()],
             indent: 0,
             helpers: HashSet::new(),
             tmp_counter: 0,
@@ -52,23 +61,54 @@ impl PythonEmitter {
         }
     }
 
+    fn current_scope(&self) -> &Scope {
+        self.scopes.last().expect("No active scope")
+    }
+
+    fn current_scope_mut(&mut self) -> &mut Scope {
+        self.scopes.last_mut().expect("No active scope")
+    }
+
+    fn push_scope(&mut self) {
+        self.scopes.push(Scope::new());
+    }
+
+    fn pop_scope(&mut self) -> Scope {
+        assert!(self.scopes.len() > 1);
+        self.scopes.pop().expect("Cannot pop last scope")
+    }
+
     fn write(&mut self, code: &str) {
-        self.current_line.push_str(code);
+        self.current_scope_mut().current_line.push_str(code);
+    }
+
+    fn indentation(&self) -> String {
+        "    ".repeat(self.indent)
     }
 
     fn newline(&mut self) {
-        assert!(!self.current_line.is_empty());
-        assert!(self.checkpoints.is_empty());
-        let indent = "    ".repeat(self.indent);
-        self.lines.push(format!("{}{}", indent, self.current_line));
-        self.current_line.clear();
+        let indent = self.indentation();
+        let scope = self.current_scope_mut();
+        assert!(!scope.current_line.is_empty());
+        assert!(scope.checkpoints.is_empty());
+        scope
+            .lines
+            .push(format!("{}{}", indent, scope.current_line));
+        scope.current_line.clear();
     }
 
-    fn indent(&mut self) {
+    fn emit_line(&mut self, line: &str) {
+        let indent = self.indentation();
+        self.current_scope_mut()
+            .lines
+            .push(format!("{}{}", indent, line));
+    }
+
+    fn increase_indentation(&mut self) {
         self.indent += 1;
     }
 
-    fn dedent(&mut self) {
+    fn decrease_indentation(&mut self) {
         assert!(self.indent > 0);
         self.indent -= 1;
     }
@@ -84,19 +124,21 @@ impl PythonEmitter {
     }
 
     fn mark_checkpoint(&mut self) {
-        self.checkpoints.push(self.current_line.len());
+        let scope = self.current_scope_mut();
+        scope.checkpoints.push(scope.current_line.len());
     }
 
     /// grabs the current_line slice since the last set checkpoint, assign it to variable and adds the assignment to the emitted code.
     /// returns the variable name that was used.
     fn hoist_checkpoint(&mut self, var: String) -> String {
-        assert!(!self.checkpoints.is_empty());
-        let start = self.checkpoints.pop().unwrap();
-        assert!(self.current_line.len() >= start);
-        let expr = self.current_line[start..].to_string();
-        self.current_line.truncate(start);
-        let indent = "    ".repeat(self.indent);
-        self.lines.push(format!("{}{} = {}", indent, var, expr));
+        let indent = self.indentation();
+        let scope = self.current_scope_mut();
+        assert!(!scope.checkpoints.is_empty());
+        let start = scope.checkpoints.pop().unwrap();
+        assert!(scope.current_line.len() >= start);
+        let expr = scope.current_line[start..].to_string();
+        scope.current_line.truncate(start);
+        scope.lines.push(format!("{}{} = {}", indent, var, expr));
         var
     }
 
@@ -106,12 +148,22 @@ impl PythonEmitter {
     }
 
     fn print(&mut self, tmp_var: &String) {
-        let indent = "    ".repeat(self.indent);
-        self.lines.push(format!("{}_print({})", indent, tmp_var));
+        let indent= self.indentation();
+        self.current_scope_mut()
+            .lines
+            .push(format!("{}_print({})", indent, tmp_var));
     }
 
     fn finish(mut self) -> String {
-        self.newline();
+        assert_eq!(self.scopes.len(), 1, "Unbalanced scopes");
+        let indent = self.indentation();
+        let scope = self.current_scope_mut();
+        if !scope.current_line.is_empty() {
+            scope
+                .lines
+                .push(format!("{}{}", indent, scope.current_line));
+            scope.current_line.clear();
+        }
 
         let mut output = String::new();
 
@@ -122,7 +174,7 @@ impl PythonEmitter {
             }
         }
 
-        output.push_str(&self.lines.join("\n"));
+        output.push_str(&self.scopes.pop().unwrap().lines.join("\n"));
         output
     }
 }
@@ -143,8 +195,13 @@ impl Transpiler {
     }
 
     fn literal_to_var(node: &LanguloSyntaxNode) -> String {
+        let text = node.text().to_string();
         // prepend var to make sure we avoid reserved keywords
-        format!("var{}", node.text().to_string())
+        if text == "@" {
+            "varself".to_string()
+        } else {
+            format!("var{}", text)
+        }
     }
 
     fn visit(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<()> {
@@ -163,7 +220,7 @@ impl Transpiler {
         Ok(())
     }
 
-    fn visit_lvalue(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<LValue> {
+    fn visit_lvalue(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<String> {
         let should_print = has_print_marker(node);
 
         let target = match node.kind() {
@@ -176,15 +233,20 @@ impl Transpiler {
         if should_print {
             self.emitter.require_helper(HelperFunction::Print);
             let tmp = self.emitter.fresh_tmp();
-            let indent = "    ".repeat(self.emitter.indent);
-            self.emitter.lines.push(format!("{}if not '{}' in vars():", indent, target));
-            self.emitter.lines.push(format!("{}{}{}='(undefined variable `{}`)'",
-            indent, "    ", target, node.text().to_string()));
-            self.emitter.lines.push(format!("{}{} = {}", indent, tmp, target));
+            self.emitter
+                .emit_line(&format!("if not '{}' in vars():", target));
+            self.emitter.increase_indentation();
+            self.emitter.emit_line(&format!(
+                "{}='(undefined variable `{}`)'",
+                target,
+                node.text().to_string()
+            ));
+            self.emitter.decrease_indentation();
+            self.emitter.emit_line(&format!("{} = {}", tmp, target));
             self.emitter.print(&tmp);
         }
 
-        Ok(LValue { target })
+        Ok(target)
     }
 
     fn visit_inner(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<()> {
@@ -256,11 +318,69 @@ impl Transpiler {
 
                 self.emitter.mark_checkpoint();
                 self.visit(val_node)?;
-                self.emitter.hoist_checkpoint(lvalue.target.clone());
-                self.emitter.write(&lvalue.target);
+                self.emitter.hoist_checkpoint(lvalue.clone());
+                self.emitter.write(&lvalue);
+            }
+            AstNode::FunctionDecl => {
+                self.visit_function(node)?;
+            }
+            AstNode::FunctionParams | AstNode::FunctionBody => {
+                return Err(LanguloError::InternalError {
+                    message: "FunctionParams/FunctionBody should not be visited directly"
+                        .to_string(),
+                });
             }
         }
         Ok(())
+    }
+
+    fn visit_function(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<()> {
+        let children: Vec<_> = node.children().collect();
+        assert_eq!(
+            children.len(),
+            2,
+            "FunctionDecl should have params and body"
+        );
+
+        let params_node = &children[0];
+        let body_node = &children[1];
+
+        assert_eq!(params_node.kind(), AstNode::FunctionParams);
+        assert_eq!(body_node.kind(), AstNode::FunctionBody);
+
+        let params: Vec<String> = params_node
+            .children()
+            .map(|child| Self::literal_to_var(&child))
+            .collect();
+
+        let fn_name = self.emitter.fresh_tmp();
+        self.emitter
+            .emit_line(&format!("def {}({}):", fn_name, params.join(", ")));
+        self.emitter.push_scope();
+        self.emitter.increase_indentation();
+
+        let body_expr = body_node
+            .first_child()
+            .ok_or(LanguloError::TranspileError {
+                message: "Function body is empty".to_string(),
+            })?;
+        self.emitter.write("return ");
+        self.visit(&body_expr)?;
+        self.emitter.newline();
+
+        self.emitter.decrease_indentation();
+
+        self.end_scope();
+
+        self.emitter.write(&fn_name);
+        Ok(())
+    }
+
+    fn end_scope(&mut self) {
+        let scope = self.emitter.pop_scope();
+        for line in scope.lines {
+            self.emitter.current_scope_mut().lines.push(line);
+        }
     }
 
     fn visit_binary(&mut self, node: &LanguloSyntaxNode, op: &str) -> LanguloResult<()> {
@@ -366,5 +486,57 @@ mod tests {
         let result = transpile_source("1 + (x $= 2)");
         assert!(result.contains("varx = 2"));
         assert!(result.contains("_print"));
+    }
+    ///////////////
+    // functions //
+    ///////////////
+
+    #[test]
+    fn test_function_no_params() {
+        let result = transpile_source("always_two = || 2");
+        assert!(result.contains("def tmp0():"));
+        assert!(result.contains("return 2"));
+        assert!(result.contains("varalways_two = tmp0"));
+    }
+
+    #[test]
+    fn test_function_one_param() {
+        let result = transpile_source("double = |x| x * 2");
+        assert!(result.contains("def tmp0(varx):"));
+        assert!(result.contains("return (varx * 2)"));
+        assert!(result.contains("vardouble = tmp0"));
+    }
+
+    #[test]
+    fn test_function_two_params() {
+        let result = transpile_source("add = |a, b| a + b");
+        assert!(result.contains("def tmp0(vara, varb):"));
+        assert!(result.contains("return (vara + varb)"));
+        assert!(result.contains("varadd = tmp0"));
+    }
+
+    #[test]
+    fn test_function_with_self() {
+        let result = transpile_source("plus = |@, other| @ + other");
+        assert!(result.contains("def tmp0(_self, varother):"));
+        assert!(result.contains("return (_self + varother)"));
+        assert!(result.contains("varplus = tmp0"));
+    }
+
+    #[test]
+    fn test_function_complex_body() {
+        let result = transpile_source("calc = |x, y| (x + y) * 2");
+        assert!(result.contains("def tmp0(varx, vary):"));
+        assert!(result.contains("return ((varx + vary) * 2)"));
+        assert!(result.contains("varcalc = tmp0"));
+    }
+
+    #[test]
+    fn test_function_in_expression() {
+        // Function as part of a larger expression
+        let result = transpile_source("1 + (f = |x| x)");
+        assert!(result.contains("def tmp0(varx):"));
+        assert!(result.contains("return varx"));
+        assert!(result.contains("varf = tmp0"));
     }
 }

@@ -74,11 +74,7 @@ comment
 -//
 ```
 
-# NOT ADDED BUT DESIGN IS LARGELY SET
-
 ## VARIABLES
-
-TODO compount assignments aren't implemented yet
 
 ```
 // assignment
@@ -86,11 +82,9 @@ n = "hello"
 n = 2
 // note that the assignment evaluates to the assigned value
 2 + b = 4 // sets b to 4 and evaluates to 6
-
-// compound assignments: +=, *=, -=, /=, %=, ^=
-x = 1
-y += n * 3
 ```
+
+# NOT ADDED BUT DESIGN IS LARGELY SET
 
 ## STRINGS
 
@@ -123,6 +117,9 @@ Things that are undecided are all related to the `STATEMENTS AND GROUPINGS` sect
 ```
 // standard definition
 add = |n, m| n + m
+
+// postfix definition
+plus = |@, other| @ + other
 
 //standard usage
 five = add(2, 3)

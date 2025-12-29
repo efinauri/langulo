@@ -35,6 +35,10 @@ pub enum AstNode {
     // unary prefix
     Not,
     Print,
+    // function
+    FunctionDecl,
+    FunctionParams,
+    FunctionBody,
 }
 
 // plumbing for rowan
@@ -73,6 +77,8 @@ impl Tok<'_> {
             | Tok::LineComment(_)
             | Tok::LParen
             | Tok::RParen
+            | Tok::Comma
+            | Tok::Pipe
             | Tok::__Test_Eof => 0,
 
             Tok::Assign => 0b_0000_0001,
@@ -85,6 +91,7 @@ impl Tok<'_> {
             Tok::Star | Tok::Slash | Tok::Percent => 0b_0010_0000,
             Tok::Caret => 0b_1000_0000,
             Tok::Dollar => 0b_1100_0000,
+            Tok::At => 0b_1110_0000,
         }
     }
 }
@@ -118,6 +125,9 @@ impl Tok<'_> {
             | Tok::Dollar
             | Tok::RParen
             | Tok::Assign
+            | Tok::Comma
+            | Tok::Pipe
+            | Tok::At
             | Tok::LParen => 1,
             Tok::__Test_Eof => 0,
         }
@@ -249,6 +259,7 @@ impl<'src> Parser<'src> {
             Tok::Num(value) => self.add_leaf_node(AstNode::Num, value),
             Tok::Literal(value) => self.add_leaf_node(AstNode::Literal, value),
             Tok::True(value) | Tok::False(value) => self.add_leaf_node(AstNode::Bool, value),
+            Tok::At => self.add_leaf_node(AstNode::Literal, "@"),
             Tok::LParen => {
                 self.ast_builder.start_node(AstNode::Grouping.into());
                 self.parse_expr(0)?;
@@ -257,6 +268,7 @@ impl<'src> Parser<'src> {
             }
             Tok::Not(_) => self.add_unary_node_prefix(AstNode::Not, tok.precedence())?,
             Tok::Dollar => self.add_unary_node_prefix(AstNode::Print, tok.precedence())?,
+            Tok::Pipe => self.parse_function_declaration()?,
             _ => {
                 return Err(LanguloError::UnexpectedToken {
                     token: tok.info(),
@@ -372,6 +384,53 @@ impl<'src> Parser<'src> {
             src: self.source.into(),
             span: (self.current_offset, 1).into(),
         })
+    }
+
+    fn parse_function_declaration(&mut self) -> LanguloResult<()> {
+        self.ast_builder.start_node(AstNode::FunctionDecl.into());
+
+        self.ast_builder.start_node(AstNode::FunctionParams.into());
+        // not guaranteed there are params (always_two = ||2)
+        if let Some(tok) = self.peek_token()? {
+            if tok != Tok::Pipe {
+                loop {
+                    let param = self.next_token()?;
+                    match param {
+                        Tok::Literal(value) =>self.add_leaf_node(AstNode::Literal, value),
+                        Tok::At => self.add_leaf_node(AstNode::Literal, "@"),
+                        _ => {
+                            return Err(LanguloError::UnexpectedToken {
+                                token: param.info(),
+                                src: self.source.into(),
+                                span: (self.current_offset - param.len(), param.len()).into(),
+                            });
+                        }
+                    }
+                    match self.peek_token()? {
+                        Some(Tok::Comma) => _ = self.next_token()?,
+                        Some(Tok::Pipe) => break,
+                        _ => {
+                            return Err(LanguloError::UnexpectedToken {
+                                token: "expected ',' or '|'".into(),
+                                src: self.source.into(),
+                                span: (self.current_offset, 1).into(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        self.require_specific_tok(Tok::Pipe)?;
+        // end of function params
+        self.ast_builder.finish_node();
+
+        self.ast_builder.start_node(AstNode::FunctionBody.into());
+        self.parse_expr(0)?;
+        self.ast_builder.finish_node();
+
+        //end of function
+        self.ast_builder.finish_node();
+        Ok(())
     }
 }
 
@@ -549,6 +608,36 @@ mod tests {
             source: "x $= 1",
             nodes: &[Root, Assign, Literal, Num],
             print_markers: &[1],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_function_simple() {
+        expect_ast(AstExpectation {
+            source: "|n,m|n+m",
+            nodes: &[Root, FunctionDecl, FunctionParams, Literal, Literal, FunctionBody, Add, Literal, Literal],
+            children: &[&[1, 2, 5], &[2, 3, 4], &[5, 6], &[6, 7, 8]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_function_with_at_param() {
+        expect_ast(AstExpectation {
+            source: "|@,other|@+other",
+            nodes: &[Root, FunctionDecl, FunctionParams, Literal, Literal, FunctionBody, Add, Literal, Literal],
+            children: &[&[1, 2, 5], &[2, 3, 4], &[5, 6], &[6, 7, 8]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_function_no_params() {
+        expect_ast(AstExpectation {
+            source: "||42",
+            nodes: &[Root, FunctionDecl, FunctionParams, FunctionBody, Num],
+            children: &[&[1, 2, 3], &[3, 4]],
             ..Default::default()
         });
     }

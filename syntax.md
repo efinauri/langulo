@@ -84,6 +84,68 @@ n = 2
 2 + b = 4 // sets b to 4 and evaluates to 6
 ```
 
+## STATEMENTS AND GROUPINGS
+
+```
+//-
+in langulo, a program is composed by a sequence of statements.
+a statement is any expression that converts to a value.
+statements are separated by newlines.
+indenting statements has no semantic meaning.
+-//
+1 // --> 1
+    2 + 3 // --> 5
+    
+//-
+if you wish for a single statement to span multiple lines, you can use `\` to signal its continuation.
+-//
+1\
+    + 2 +\ 
+    3 // --> 6
+
+//- 
+to group multiple statements together into a single statement, called a grouping statement,
+you can use `{` `}`. a grouping statement evaluates to its last statement, 
+unless it encounters a return statement. in that case, it evaluates to the return value.
+-//
+{
+    "hello"
+    "hi"
+} // --> "hi"
+{
+    return "hello"
+    "hi"
+} // --> "hello"
+```
+
+## FUNCTIONS
+
+```
+// standard definition
+add = |n, m| n + m
+
+// postfix definition
+plus = |@, other| @ + other
+
+//standard usage
+five = add(2, 3)
+
+// postfix usage
+five = 2 @ plus 3
+
+// postfix definition makes it easier to chain multiple functions
+nine = 2\
+    plus(3)\
+    plus(4)
+    
+// if you need a larger function body use a grouping statement
+// | @ | {
+//  result = @ + 1
+//  result * 2
+//  return "result is {tmp}"
+// }
+```
+
 # NOT ADDED BUT DESIGN IS LARGELY SET
 
 ## STRINGS
@@ -110,73 +172,9 @@ plus
 {2+3}"
 ```
 
-## FUNCTIONS
 
-Things that are undecided are all related to the `STATEMENTS AND GROUPINGS` section
-
-```
-// standard definition
-add = |n, m| n + m
-
-// postfix definition
-plus = |@, other| @ + other
-
-//standard usage
-five = add(2, 3)
-
-// postfix definition
-plus = |@, other| @ + other
-
-// postfix usage
-nine = 2\
-    plus(3)\
-    plus(4)
-    
-// if you need a larger function body use a grouping statement
-// | @ | {
-//  result = @ + 1
-//  result * 2
-//  return "result is {tmp}"
-// }
-```
 
 # NOT ADDED AND DESIGN IS NOT SET
-
-## STATEMENTS AND GROUPINGS
-
-multiline statements are maybe ugly with `\`
-
-```
-//-
-a statement is any expression that converts to a value.
-statements are separated by newlines.
-indenting statements has no semantic meaning.
--//
-1 // --> 1
-    2 + 3 // --> 5
-    
-//-
-statements by default span a single line.
-if you wish for a statement to span multiple lines, you can use `\`
--//
-1\
-    + 2 +\ 
-    3 // --> 6
-
-//- 
-to group multiple statements together into a single statement you can use `{` `}`.
-a grouping statement evaluates to its last statement, unless it encounters a return.
-in that case, it evaluates to the return value.
--//
-{
-    "hello"
-    "hi"
-} // --> "hi"
-{
-    return "hello"
-    "hi"
-} // --> "hello"
-```
 
 ## OPTIONS AND IF/ELSE
 

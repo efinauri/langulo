@@ -1,5 +1,5 @@
 use crate::errors::{LanguloError, LanguloResult};
-use crate::parser::{AstNode, LanguloSyntaxNode, has_print_marker};
+use crate::parser::{has_print_marker, AstNode, LanguloSyntaxNode};
 use std::collections::HashSet;
 use std::string::ToString;
 
@@ -14,12 +14,14 @@ pub fn transpile(ast: &LanguloSyntaxNode) -> LanguloResult<String> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum HelperFunction {
     Print,
+    Return,
 }
 
 impl HelperFunction {
     fn definition(&self) -> &'static str {
         match self {
             HelperFunction::Print => "def _print(x):\n    print(x)\n    return x",
+            HelperFunction::Return => "class _Return(Exception):\n    def __init__(self, v): self.value = v",
         }
     }
 }
@@ -148,7 +150,7 @@ impl PythonEmitter {
     }
 
     fn print(&mut self, tmp_var: &String) {
-        let indent= self.indentation();
+        let indent = self.indentation();
         self.current_scope_mut()
             .lines
             .push(format!("{}_print({})", indent, tmp_var));
@@ -329,7 +331,7 @@ impl Transpiler {
                     message: "FunctionParams/FunctionBody should not be visited directly"
                         .to_string(),
                 });
-            },
+            }
             AstNode::PrefixFnCall => {
                 let children: Vec<_> = node.children().collect();
                 let func = &children[0];
@@ -378,7 +380,52 @@ impl Transpiler {
                 return Err(LanguloError::InternalError {
                     message: "CallArgs should not be visited directly".to_string(),
                 });
+            },
+
+            AstNode::Block => {
+                let children: Vec<_> = node.children().collect();
+                assert!(!children.is_empty(), "Empty block should have been caught by parser");
+                self.emitter.require_helper(HelperFunction::Return);
+
+                let result_var = self.emitter.fresh_tmp();
+                self.emitter.emit_line("try:");
+                self.emitter.increase_indentation();
+
+                for (i, child) in children.iter().enumerate() {
+                    let is_last = i == children.len() - 1;
+
+                    if is_last {
+                        self.emitter.mark_checkpoint();
+                        self.visit(child)?;
+                        let val = self.emitter.hoist_checkpoint_to_tmp();
+                        self.emitter.emit_line(&format!("{} = {}", result_var, val));
+                    } else {
+                        self.emitter.mark_checkpoint();
+                        self.visit(child)?;
+                        self.emitter.hoist_checkpoint_to_tmp();
+                    }
+                }
+
+                self.emitter.decrease_indentation();
+                self.emitter.emit_line("except _Return as _r:");
+                self.emitter.increase_indentation();
+                self.emitter.emit_line(&format!("{} = _r.value", result_var));
+                self.emitter.decrease_indentation();
+
+                self.emitter.write(&result_var);
             }
+
+            AstNode::Return => {
+                self.emitter.require_helper(HelperFunction::Return);
+                let child = node.first_child().ok_or(LanguloError::TranspileError {
+                    message: "Return node has no children".to_string(),
+                })?;
+                self.emitter.mark_checkpoint();
+                self.visit(&child)?;
+                let val = self.emitter.hoist_checkpoint_to_tmp();
+                self.emitter.emit_line(&format!("raise _Return({})", val));
+                self.emitter.write("None");
+            },
         }
         Ok(())
     }
@@ -616,5 +663,32 @@ mod tests {
         assert!(result.contains("def tmp0(vara, varb):"));
         assert!(result.contains("return (vara + varb)"));
         assert!(result.contains("varadd = tmp0"));
+    }
+
+    #[test]
+    fn test_block_single() {
+        let result = transpile_source("{ 42 }");
+        assert!(result.contains("class _Return"));
+        assert!(result.contains("try:"));
+        assert!(result.contains("except _Return"));
+    }
+
+    #[test]
+    fn test_block_multiple() {
+        let result = transpile_source("{ x = 1\nx + 1 }");
+        assert!(result.contains("varx = 1"));
+        assert!(result.contains("(varx + 1)"));
+    }
+
+    #[test]
+    fn test_block_with_return() {
+        let result = transpile_source("{ return 42\n99 }");
+        assert!(result.contains("raise _Return("));
+    }
+
+    #[test]
+    fn test_block_return_value() {
+        let result = transpile_source("{ return 42 }");
+        assert!(result.contains("raise _Return("));
     }
 }

@@ -146,6 +146,7 @@ mod tests {
         let python_code = transpile(&ast).map_err(|e| LanguloError::PythonError {
             message: format!("Transpile error: {:?}", e),
         })?;
+        println!("Transpiled to:\n{}", python_code);
         eval_python(&python_code)
     }
 
@@ -469,5 +470,61 @@ mod tests {
         );
         assert_eq!(eval_langulo_display("both_positive(1, 2)"), "True");
         assert_eq!(eval_langulo_display("both_positive(1, -1)"), "False");
+    }
+
+    #[test]
+    fn test_block_evaluates_to_last() {
+        assert_eq!(eval_langulo_display("{ 1\n2\n3 }"), "3");
+    }
+
+    #[test]
+    fn test_block_with_assignments() {
+        assert_eq!(eval_langulo_display("{ x = 1\ny = 2\nx + y }"), "3");
+    }
+
+    #[test]
+    fn test_block_return_early() {
+        assert_eq!(eval_langulo_display("{ return 42\n99 }"), "42");
+    }
+
+    #[test]
+    fn test_block_return_middle() {
+        assert_eq!(eval_langulo_display("{ x = 1\nreturn x + 1\nx + 100 }"), "2");
+    }
+
+    #[test]
+    fn test_block_no_return() {
+        assert_eq!(eval_langulo_display("{ x = 5\nx * 2 }"), "10");
+    }
+
+    #[test]
+    fn test_block_in_expression() {
+        assert_eq!(eval_langulo_display("1 + { 2 }"), "3");
+        assert_eq!(eval_langulo_display("{ 2 } + { 3 }"), "5");
+    }
+
+    #[test]
+    fn test_nested_blocks() {
+        assert_eq!(eval_langulo_display("{ { 42 } }"), "42");
+        assert_eq!(eval_langulo_display("{ x = { 1 + 2 }\nx * 2 }"), "6");
+    }
+
+    #[test]
+    fn test_block_scoping() {
+        // Variables defined in block should persist (no lexical scoping yet)
+        assert_eq!(eval_langulo_display("{ x = 42 }"), "42");
+        assert_eq!(eval_langulo_display("x"), "42");
+    }
+
+    #[test]
+    fn test_function_with_block() {
+        assert_eq!(eval_langulo_display("f = |x| { y = x + 1\ny * 2 }"), "<function>");
+        assert_eq!(eval_langulo_display("f(5)"), "12");
+    }
+
+    #[test]
+    fn test_function_with_block_return() {
+        assert_eq!(eval_langulo_display("g = |x| { return x * 2\nx + 100 }"), "<function>");
+        assert_eq!(eval_langulo_display("g(5)"), "10");
     }
 }

@@ -3,9 +3,11 @@ use crate::parser::parse;
 use crate::runtime::{eval_python, init_python};
 use crate::transpile::transpile;
 use colored::Colorize;
+use logos::Logos;
 use miette::{GraphicalReportHandler, GraphicalTheme};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use crate::lexer::Tok;
 
 pub struct Repl {
     show_python: bool,
@@ -51,16 +53,13 @@ impl Repl {
         }
 
         loop {
-            let prompt = ">>> ".cyan().bold().to_string();
-            match rl.readline(&prompt) {
-                Ok(line) => {
-                    let line = line.trim();
-                    if line.is_empty() {
-                        continue;
-                    }
-
-                    let _ = rl.add_history_entry(line);
-                    self.eval_line(line);
+            match self.read_complete_input(&mut rl) {
+                Ok(Some(input)) => {
+                    let _ = rl.add_history_entry(&input);
+                    self.eval_line(&input);
+                }
+                Ok(None) => {
+                    continue;
                 }
                 Err(ReadlineError::Interrupted) => {
                     println!("{}", "^C".dimmed());
@@ -83,6 +82,61 @@ impl Repl {
 
         Ok(())
     }
+
+    fn read_complete_input(&self, rl: &mut DefaultEditor) -> Result<Option<String>, ReadlineError> {
+        let prompt = ">>> ".cyan().bold().to_string();
+        let first_line = rl.readline(&prompt)?;
+
+        let trimmed = first_line.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+
+        let mut input = first_line;
+
+        loop {
+            let (indent_level, has_continuation) = Self::analyze_input(&input);
+            if indent_level <= 0 && !has_continuation {
+                break;
+            } // else need more input
+            let continuation_prompt = self.make_continuation_prompt(indent_level.max(0) as usize, has_continuation);
+            let next_line = rl.readline(&continuation_prompt)?;
+
+            input.push('\n');
+            input.push_str(&next_line);
+        }
+
+        Ok(Some(input))
+    }
+
+    fn analyze_input(input: &str) -> (i32, bool) {
+        let mut indent_level = 0i32;
+        let mut has_continuation = false;
+
+        for token in Tok::lexer(input) {
+            match token {
+                Ok(Tok::LBrace) => indent_level += 1,
+                Ok(Tok::RBrace) => indent_level -= 1,
+                Ok(Tok::LineContinuation(_)) => has_continuation = true,
+                Ok(Tok::Newline(_)) => has_continuation = false,
+                Ok(_) => has_continuation = false,
+                Err(_) => {} // parser will catch this later anyways
+            }
+        }
+        (indent_level, has_continuation)
+    }
+
+    fn make_continuation_prompt(&self, indent_level: usize, has_continuation: bool) -> String {
+        let dots = "... ".cyan().to_string();
+        let effective_indent = if has_continuation && indent_level == 0 {
+            1
+        } else {
+            indent_level
+        };
+        let indent = dots.repeat(effective_indent);
+        format!("{}{}", dots, indent)
+    }
+
 
     fn eval_line(&mut self, input: &str) {
         let ast = match parse(input) {

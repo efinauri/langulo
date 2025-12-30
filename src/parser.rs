@@ -42,6 +42,8 @@ pub enum AstNode {
     PrefixFnCall,
     PostfixFnCall,
     CallArgs,
+    Block,
+    Return,
 }
 
 // plumbing for rowan
@@ -76,11 +78,16 @@ impl Tok<'_> {
             | Tok::True(_)
             | Tok::False(_)
             | Tok::Whitespace(_)
+            | Tok::LineContinuation(_)
             | Tok::BlockComment(_)
             | Tok::LineComment(_)
             | Tok::RParen
             | Tok::Comma
+            | Tok::LBrace
+            | Tok::RBrace
             | Tok::Pipe
+            | Tok::Return(_)
+            | Tok::Newline(_)
             | Tok::__Test_Eof => 0,
 
             Tok::Assign => 0b_0000_0001,
@@ -116,6 +123,9 @@ impl Tok<'_> {
             | Tok::Neq(slice)
             | Tok::Leq(slice)
             | Tok::Geq(slice)
+            | Tok::LineContinuation(slice)
+            | Tok::Newline(slice)
+            | Tok::Return(slice)
             | Tok::Whitespace(slice) => slice.len(),
             Tok::Plus
             | Tok::Minus
@@ -126,12 +136,14 @@ impl Tok<'_> {
             | Tok::Lt
             | Tok::Gt
             | Tok::Dollar
+            | Tok::LParen
             | Tok::RParen
+            | Tok::LBrace
+            | Tok::RBrace
             | Tok::Assign
             | Tok::Comma
             | Tok::Pipe
-            | Tok::At
-            | Tok::LParen => 1,
+            | Tok::At => 1,
             Tok::__Test_Eof => 0,
         }
     }
@@ -231,8 +243,10 @@ impl<'src> Parser<'src> {
 
     fn parse_root(&mut self) -> LanguloResult<()> {
         self.ast_builder.start_node(Root.into());
+        self.skip_newlines()?;
         while self.peek_token()?.is_some() {
             self.parse_expr(0)?;
+            self.skip_newlines()?;
         }
         self.ast_builder.finish_node();
         Ok(())
@@ -278,6 +292,31 @@ impl<'src> Parser<'src> {
                 self.parse_expr(Tok::Star.precedence())?;
                 self.ast_builder.finish_node();
             },
+            Tok::LBrace => {
+                self.ast_builder.start_node(AstNode::Block.into());
+                self.skip_newlines()?;
+                // cannot have empty blocks
+                if let Some(Tok::RBrace) = self.peek_token()? {
+                    return Err(LanguloError::EmptyBlock {
+                        src: self.source.into(),
+                        span: (self.current_offset, 1).into(),
+                    });
+                }
+                loop {
+                    if let Some(Tok::RBrace) = self.peek_token()? {
+                        break;
+                    }
+                    self.parse_expr(0)?;
+                    self.skip_newlines()?;
+                }
+                self.require_specific_tok(Tok::RBrace)?;
+                self.ast_builder.finish_node();
+            }
+            Tok::Return(_) => {
+                self.ast_builder.start_node(AstNode::Return.into());
+                self.parse_expr(0)?;
+                self.ast_builder.finish_node();
+            }
 
             _ => {
                 return Err(LanguloError::UnexpectedToken {
@@ -373,10 +412,20 @@ impl<'src> Parser<'src> {
         Ok(())
     }
 
+    fn skip_newlines(&mut self) -> LanguloResult<()> {
+        while let Some(Tok::Newline(_)) = self.peek_token()? {
+            self.next_token()?;
+        }
+        Ok(())
+    }
+
     fn skip_trivia(&mut self) -> LanguloResult<()> {
         while let Some(Ok(tok)) = self.lexer.peek() {
             match tok {
-                Tok::Whitespace(slice) | Tok::BlockComment(slice) | Tok::LineComment(slice) => {
+                Tok::Whitespace(slice)
+                | Tok::BlockComment(slice)
+                | Tok::LineContinuation(slice)
+                | Tok::LineComment(slice) => {
                     self.current_offset += slice.len();
                     self.lexer.next();
                 }
@@ -825,5 +874,137 @@ mod tests {
             children: &[&[1, 2, 3], &[3, 4, 8], &[4, 5, 6], &[6, 7]],
             ..Default::default()
         });
+    }
+
+    #[test]
+    fn test_block_single_expr() {
+        expect_ast(AstExpectation {
+            source: "{ 42 }",
+            nodes: &[Root, Block, Num],
+            children: &[&[1, 2]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_block_multiple_statements() {
+        expect_ast(AstExpectation {
+            source: "{ 1\n2\n3 }",
+            nodes: &[Root, Block, Num, Num, Num],
+            children: &[&[1, 2, 3, 4]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_block_with_assignments() {
+        expect_ast(AstExpectation {
+            source: "{ x = 1\ny = 2\nx + y }",
+            nodes: &[Root, Block, Assign, Literal, Num, Assign, Literal, Num, Add, Literal, Literal],
+            children: &[&[1, 2, 5, 8], &[2, 3, 4], &[5, 6, 7], &[8, 9, 10]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_block_with_return() {
+        expect_ast(AstExpectation {
+            source: "{ return 42 }",
+            nodes: &[Root, Block, Return, Num],
+            children: &[&[1, 2], &[2, 3]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_block_return_early() {
+        expect_ast(AstExpectation {
+            source: "{ return 1\n2 }",
+            nodes: &[Root, Block, Return, Num, Num],
+            children: &[&[1, 2, 4], &[2, 3]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_nested_blocks() {
+        expect_ast(AstExpectation {
+            source: "{ { 1 } }",
+            nodes: &[Root, Block, Block, Num],
+            children: &[&[1, 2], &[2, 3]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_block_in_expression() {
+        expect_ast(AstExpectation {
+            source: "1 + { 2 }",
+            nodes: &[Root, Add, Num, Block, Num],
+            children: &[&[1, 2, 3], &[3, 4]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_line_continuation() {
+        // 1 + \n 2 should parse as single expression
+        expect_ast(AstExpectation {
+            source: "1 +\\\n2",
+            nodes: &[Root, Add, Num, Num],
+            children: &[&[1, 2, 3]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_line_continuation_with_indent() {
+        expect_ast(AstExpectation {
+            source: "1\\\n    + 2",
+            nodes: &[Root, Add, Num, Num],
+            children: &[&[1, 2, 3]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_multiple_statements_root() {
+        expect_ast(AstExpectation {
+            source: "1\n2\n3",
+            nodes: &[Root, Num, Num, Num],
+            children: &[&[0, 1, 2, 3]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_empty_lines_ignored() {
+        expect_ast(AstExpectation {
+            source: "\n\n1\n\n2\n\n",
+            nodes: &[Root, Num, Num],
+            children: &[&[0, 1, 2]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_function_with_block_body() {
+        expect_ast(AstExpectation {
+            source: "f = |x| { y = x + 1\nreturn y }",
+            nodes: &[Root, Assign, Literal, FunctionDecl, FunctionParams, Literal, FunctionBody, Block, Assign, Literal, Add, Literal, Num, Return, Literal],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_empty_block_error() {
+        let result = parse("{ }");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_empty_block_with_newlines_error() {
+        let result = parse("{\n\n}");
+        assert!(result.is_err());
     }
 }

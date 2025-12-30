@@ -85,6 +85,14 @@ pub enum LanguloError {
         #[label("unexpected token")]
         span: SourceSpan,
     },
+    #[error("Empty blocks are not allowed")]
+    #[diagnostic(code(langulo::syntax::empty_block))]
+    EmptyBlock {
+        #[source_code]
+        src: String,
+        #[label("empty blocks are not allowed")]
+        span: SourceSpan,
+    },
 }
 
 pub type LanguloResult<T> = Result<T, LanguloError>;

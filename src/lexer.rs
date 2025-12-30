@@ -12,7 +12,7 @@ pub enum Tok<'a> { // to make it easier to access token len, all tokens that are
     #[regex(r"false")]
     False(&'a str),
     // trivia
-    #[regex(r"[ \t\n\r]+")]
+    #[regex(r"[ \t]+")]
     Whitespace(&'a str),
     #[regex(r"//([^-\n][^\n]*)?", priority = 2)] // needs to be matched before division
     LineComment(&'a str),
@@ -58,6 +58,16 @@ pub enum Tok<'a> { // to make it easier to access token len, all tokens that are
     LParen,
     #[regex(r"\)")]
     RParen,
+    #[token("{")]
+    LBrace,
+    #[token("}")]
+    RBrace,
+    #[token("return")]
+    Return(&'a str),
+    #[regex(r"\\[ \t]*\n[ \t]*", |lex| lex.slice())]
+    LineContinuation(&'a str),
+    #[regex(r"\n[ \t]*")]
+    Newline(&'a str),
     // others
     #[regex(r"=")]
     Assign,
@@ -105,6 +115,11 @@ impl Tok<'_> {
             Tok::Pipe => "|",
             Tok::At => "@",
             Tok::__Test_Eof => "EOF",
+            Tok::LBrace => "{",
+            Tok::RBrace => "}",
+            Tok::Return(_) => "return",
+            Tok::LineContinuation(_) => "\\",
+            Tok::Newline(_) => "\n",
         }
         .into()
     }
@@ -160,9 +175,9 @@ mod tests {
 on multiple
 lines-//5
 6"#,
-            &[Num("1"), LineComment("//normal comment"), Whitespace("\n"),
-            Num("2"), BlockComment("//-multiline on single line-//"), Num("3"), Whitespace("\n"),
-                Num("4"), BlockComment("//-multiline\non multiple\nlines-//"), Num("5"), Whitespace("\n"),
+            &[Num("1"), LineComment("//normal comment"), Newline("\n"),
+            Num("2"), BlockComment("//-multiline on single line-//"), Num("3"), Newline("\n"),
+                Num("4"), BlockComment("//-multiline\non multiple\nlines-//"), Num("5"), Newline("\n"),
                 Num("6"), __Test_Eof]
         )
     }
@@ -178,5 +193,84 @@ lines-//5
         expect_tokens("and not or xor < > <= >=", &[And("and"), Whitespace(" "), Not("not"), Whitespace(" "), Or("or"), Whitespace(" "), Xor("xor"), Whitespace(" "), Lt, Whitespace(" "), Gt, Whitespace(" "), Leq("<="), Whitespace(" "), Geq(">="), __Test_Eof]);
         // keyword match is exact
         expect_tokens("organic andnot", &[Literal("organic"), Whitespace(" "), Literal("andnot"), __Test_Eof]);
+    }
+
+    #[test]
+    fn test_braces() {
+        let tokens: Vec<_> = Tok::lexer("{ x }")
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(tokens, vec![
+            LBrace,
+            Whitespace(" "),
+            Literal("x"),
+            Whitespace(" "),
+            RBrace,
+        ]);
+    }
+
+    #[test]
+    fn test_newline() {
+        let tokens: Vec<_> = Tok::lexer("1\n2")
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(tokens, vec![
+            Num("1"),
+            Newline("\n"),
+            Num("2"),
+        ]);
+    }
+
+    #[test]
+    fn test_newline_with_indent() {
+        let tokens: Vec<_> = Tok::lexer("1\n    2")
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(tokens, vec![
+            Num("1"),
+            Newline("\n    "),
+            Num("2"),
+        ]);
+    }
+
+    #[test]
+    fn test_line_continuation() {
+        let tokens: Vec<_> = Tok::lexer("1 +\\\n    2")
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(tokens, vec![
+            Num("1"),
+            Whitespace(" "),
+            Plus,
+            LineContinuation("\\\n    "),
+            Num("2"),
+        ]);
+    }
+
+    #[test]
+    fn test_line_continuation_before_newline() {
+        // 1\n    + 2 with continuation
+        let tokens: Vec<_> = Tok::lexer("1\\\n    + 2")
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(tokens, vec![
+            Num("1"),
+            LineContinuation("\\\n    "),
+            Plus,
+            Whitespace(" "),
+            Num("2"),
+        ]);
+    }
+
+    #[test]
+    fn test_return_keyword() {
+        let tokens: Vec<_> = Tok::lexer("return 42")
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(tokens, vec![
+            Return("return"),
+            Whitespace(" "),
+            Num("42"),
+        ]);
     }
 }

@@ -152,13 +152,12 @@ nine = 2\
 
 TODO escape characters, indexing/slicing and making them iterables
 
-
 ```
 //- 
 values: 
     "string"
-    "multiline
-    string"
+    """multiline
+    string"""
 operations: 
     + (concatenation)
 -//

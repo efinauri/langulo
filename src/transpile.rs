@@ -426,6 +426,43 @@ impl Transpiler {
                 self.emitter.emit_line(&format!("raise _Return({})", val));
                 self.emitter.write("None");
             },
+            AstNode::StringLit => {
+                let children: Vec<_> = node.children().collect();
+
+                if children.is_empty() {
+                    self.emitter.write("\"\"");
+                } else if children.len() == 1 && children[0].kind() == AstNode::StringPart {
+                    let text = children[0].text().to_string();
+                    self.emitter.write(&text);
+                } else {
+                    self.emitter.write("f\"");
+                    for child in children {
+                        match child.kind() {
+                            AstNode::StringPart => {
+                                let text = child.text().to_string();
+                                let content = &text[1..text.len()-1];
+                                self.emitter.write(content);
+                            }
+                            AstNode::InterpolationPart => {
+                                self.emitter.write("{");
+                                let expr = child.first_child().ok_or(LanguloError::TranspileError {
+                                    message: "InterpolationPart has no expression".to_string(),
+                                })?;
+                                self.visit(&expr)?;
+                                self.emitter.write("}");
+                            }
+                            _ => {}
+                        }
+                    }
+                    self.emitter.write("\"");
+                }
+            }
+
+            AstNode::StringPart | AstNode::InterpolationPart => {
+                return Err(LanguloError::InternalError {
+                    message: "StringPart/InterpolationPart should be handled by StringLit".to_string(),
+                });
+            }
         }
         Ok(())
     }

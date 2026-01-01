@@ -36,6 +36,20 @@ pub enum LanguloError {
         span: SourceSpan,
     },
 
+    #[error("Unexpected token: '{token}'.")]
+    #[diagnostic(
+        code(langulo::syntax::unexpected_token),
+        help("Was expecting: '{expected}'")
+    )]
+    UnexpectedTokenWasExpecting {
+        token: String,
+        expected: String,
+        #[source_code]
+        src: String,
+        #[label("unexpected token")]
+        span: SourceSpan,
+    },
+
     #[error("Invalid number format: '{value}'")]
     #[diagnostic(
         code(langulo::syntax::invalid_number),
@@ -88,6 +102,14 @@ pub enum LanguloError {
     #[error("Empty blocks are not allowed")]
     #[diagnostic(code(langulo::syntax::empty_block))]
     EmptyBlock {
+        #[source_code]
+        src: String,
+        #[label("empty blocks are not allowed")]
+        span: SourceSpan,
+    },
+    #[error("Unclosed string literal: '{src}' starting at {span:?}")]
+    #[diagnostic(code(langulo::syntax::empty_block))]
+    UnclosedString {
         #[source_code]
         src: String,
         #[label("empty blocks are not allowed")]

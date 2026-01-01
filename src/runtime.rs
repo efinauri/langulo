@@ -35,14 +35,12 @@ pub fn init_python() -> LanguloResult<()> {
 }
 
 pub fn eval_python(code: &str) -> LanguloResult<EvalResult> {
-    Python::with_gil(|py| {
-        let globals = PYTHON_GLOBALS
-            .get()
-            .ok_or_else(|| LanguloError::PythonError {
-                message: "Python not initialized".into(),
-            })?
-            .as_ref(py);
+    eval_python_internal(code, PYTHON_GLOBALS.get().unwrap())
+}
 
+pub fn eval_python_internal(code: &str, globals: &Py<PyDict>) -> LanguloResult<EvalResult> {
+    Python::with_gil(|py| {
+        let globals = globals.as_ref(py);
         // Split into statements and final expression
         let lines: Vec<&str> = code.lines().collect();
 
@@ -445,7 +443,10 @@ mod tests {
             eval_langulo_display("make_adder = |n| |x| x + n"),
             "<function>"
         );
-        assert_eq!(eval_langulo_display("addfive = make_adder(5)"), "<function>");
+        assert_eq!(
+            eval_langulo_display("addfive = make_adder(5)"),
+            "<function>"
+        );
         assert_eq!(eval_langulo_display("addfive(10)"), "15");
     }
 
@@ -489,7 +490,10 @@ mod tests {
 
     #[test]
     fn test_block_return_middle() {
-        assert_eq!(eval_langulo_display("{ x = 1\nreturn x + 1\nx + 100 }"), "2");
+        assert_eq!(
+            eval_langulo_display("{ x = 1\nreturn x + 1\nx + 100 }"),
+            "2"
+        );
     }
 
     #[test]
@@ -518,13 +522,115 @@ mod tests {
 
     #[test]
     fn test_function_with_block() {
-        assert_eq!(eval_langulo_display("f = |x| { y = x + 1\ny * 2 }"), "<function>");
+        assert_eq!(
+            eval_langulo_display("f = |x| { y = x + 1\ny * 2 }"),
+            "<function>"
+        );
         assert_eq!(eval_langulo_display("f(5)"), "12");
     }
 
     #[test]
     fn test_function_with_block_return() {
-        assert_eq!(eval_langulo_display("g = |x| { return x * 2\nx + 100 }"), "<function>");
+        assert_eq!(
+            eval_langulo_display("g = |x| { return x * 2\nx + 100 }"),
+            "<function>"
+        );
         assert_eq!(eval_langulo_display("g(5)"), "10");
+    }
+
+    /////////////
+    // strings //
+    /////////////
+
+    #[test]
+    fn test_string_simple() {
+        assert_eq!(eval_langulo_display(r#""hello""#), "'hello'");
+        assert_eq!(eval_langulo_display(r#"'hello'"#), "'hello'");
+    }
+
+    #[test]
+    fn test_string_concatenation() {
+        assert_eq!(
+            eval_langulo_display(r#""hello" + " world""#),
+            "'hello world'"
+        );
+    }
+
+    #[test]
+    fn test_string_interpolation_var() {
+        assert_eq!(eval_langulo_display(r#"name = "Alice""#), "'Alice'");
+        assert_eq!(eval_langulo_display(r#""hello {name}""#), "'hello Alice'");
+    }
+
+    #[test]
+    fn test_string_interpolation_expr() {
+        assert_eq!(eval_langulo_display(r#""2 + 2 = {2 + 2}""#), "'2 + 2 = 4'");
+    }
+
+    #[test]
+    fn test_string_interpolation_multiple() {
+        assert_eq!(eval_langulo_display(r#"a = 1"#), "1");
+        assert_eq!(eval_langulo_display(r#"b = 2"#), "2");
+        assert_eq!(
+            eval_langulo_display(r#""{a} + {b} = {a + b}""#),
+            "'1 + 2 = 3'"
+        );
+    }
+
+    #[test]
+    fn test_string_nested_quotes() {
+        assert_eq!(
+            eval_langulo_display(r#""hello {'world'}""#),
+            "'hello world'"
+        );
+    }
+
+    #[test]
+    fn test_string_interpolation_nested_string() {
+        setup();
+        assert_eq!(eval_langulo_display(r#"x = 'inner'"#), "'inner'");
+        assert_eq!(
+            eval_langulo_display(r#""outer {x} end""#),
+            "'outer inner end'"
+        );
+    }
+
+    #[test]
+    fn test_multiline_string() {
+        assert_eq!(
+            eval_langulo_display(
+                r#""""hello
+world""""#
+            ),
+            "'hello\nworld'"
+        );
+    }
+
+    #[test]
+    fn test_string_escape() {
+        assert_eq!(
+            eval_langulo_display(r#""hello \"world\"""#),
+            r#"'hello "world"'"#
+        );
+    }
+
+    #[test]
+    fn test_string_escape_single() {
+        assert_eq!(
+            eval_langulo_display(r#"'hello \'world\''"#),
+            "hello 'world'"
+        );
+    }
+
+    #[test]
+    fn test_empty_string() {
+        assert_eq!(eval_langulo_display(r#""""#), "''");
+        assert_eq!(eval_langulo_display(r#"''"#), "''");
+    }
+
+    #[test]
+    fn test_string_only_interpolation() {
+        assert_eq!(eval_langulo_display(r#"x = 42"#), "42");
+        assert_eq!(eval_langulo_display(r#""{x}""#), "'42'");
     }
 }

@@ -1,24 +1,32 @@
-use logos::Logos;
+use logos::{Lexer, Logos};
 
+// to make it easier to access token len, all tokens that are bigger than 1 char hold their slice, even if static
 #[derive(Logos, Debug, PartialEq, Copy, Clone)]
-pub enum Tok<'a> { // to make it easier to access token len, all tokens that are bigger than 1 char hold their slice, even if static
+pub enum Tok<'a> {
     #[regex(r"[a-zA-Z][a-zA-Z_]*")]
     Literal(&'a str),
-    //values
     #[regex(r"[0-9_]+(\.[0-9_]+)?")]
     Num(&'a str),
+    #[regex(r#""([^"\\]|\\.)*""#)]
+    StringLitDouble(&'a str),
+    #[regex(r#"'([^'\\]|\\.)*'"#)]
+    StringLitSingle(&'a str),
+    // to play nicer with the REPL, this will match until closing quotes or EOF
+    #[token(r#"""""#, lex_triple_double_quote)]
+    TripleDoubleQuote(&'a str),
+    // to play nicer with the REPL, this will match until closing quotes or EOF
+    #[token("'''", lex_triple_single_quote)]
+    TripleSingleQuote(&'a str),
     #[regex(r"true")]
     True(&'a str),
     #[regex(r"false")]
     False(&'a str),
-    // trivia
     #[regex(r"[ \t]+")]
     Whitespace(&'a str),
     #[regex(r"//([^-\n][^\n]*)?", priority = 2)] // needs to be matched before division
     LineComment(&'a str),
     #[regex(r"//-[^-]*(-+[^/-][^-]*)*-+//")]
     BlockComment(&'a str),
-    // operations
     #[regex(r"\+")]
     Plus,
     #[regex(r"-")]
@@ -53,7 +61,6 @@ pub enum Tok<'a> { // to make it easier to access token len, all tokens that are
     Geq(&'a str),
     #[regex(r"\$")]
     Dollar,
-    // grouping
     #[regex(r"\(")]
     LParen,
     #[regex(r"\)")]
@@ -64,11 +71,13 @@ pub enum Tok<'a> { // to make it easier to access token len, all tokens that are
     RBrace,
     #[token("return")]
     Return(&'a str),
-    #[regex(r"\\[ \t]*\n[ \t]*", |lex| lex.slice())]
+    #[regex(r"\\[ \t]*\n[ \t]*")]
     LineContinuation(&'a str),
+    // helper token for the REPL to match end-of-input \
+    #[regex(r"\\[ \t]*")]
+    TrailingBackslash(&'a str),
     #[regex(r"\n[ \t]*")]
     Newline(&'a str),
-    // others
     #[regex(r"=")]
     Assign,
     #[regex(r",")]
@@ -77,15 +86,64 @@ pub enum Tok<'a> { // to make it easier to access token len, all tokens that are
     Pipe,
     #[regex(r"@")]
     At,
+    // just to assert during tests that we matched the entire input
     #[allow(dead_code, non_camel_case_types)]
     __Test_Eof,
+}
+
+fn lex_triple_double_quote<'a>(lex: &mut Lexer<'a, Tok<'a>>) -> &'a str {
+    let start = lex.span().start;
+    let remainder = lex.remainder();
+
+    // go to either closing quotes or eof
+    if let Some(end_pos) = find_closing_triple_quote(remainder, b"\"\"\"") {
+        lex.bump(end_pos + 3);
+    } else {
+        lex.bump(remainder.len());
+    }
+    &lex.source()[start..lex.span().end]
+}
+
+fn lex_triple_single_quote<'a>(lex: &mut Lexer<'a, Tok<'a>>) -> &'a str {
+    let start = lex.span().start;
+    let remainder = lex.remainder();
+
+    // go to either closing quotes or eof
+    if let Some(end_pos) = find_closing_triple_quote(remainder, b"'''") {
+        lex.bump(end_pos + 3);
+    } else {
+        lex.bump(remainder.len());
+    }
+    &lex.source()[start..lex.span().end]
+}
+
+fn find_closing_triple_quote(s: &str, quote: &[u8; 3]) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // skip \" and \'
+        if bytes[i] == b'\\' {
+            i += 2;
+            continue;
+        }
+        if i + 2 < bytes.len() && &bytes[i..i + 3] == quote {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
 }
 
 impl Tok<'_> {
     pub fn info(&self) -> String {
         match self {
-            Tok::Num(value) |
-            Tok::Literal(value) => value,
+            Tok::Num(value)
+            | Tok::StringLitSingle(value)
+            | Tok::StringLitDouble(value)
+            | Tok::TripleSingleQuote(value)
+            | Tok::TripleDoubleQuote(value)
+            | Tok::TrailingBackslash(value)
+            | Tok::Literal(value) => value,
             Tok::Whitespace(_) => "whitespace",
             Tok::LineComment(_) => "comment",
             Tok::BlockComment(_) => "multiline comment",
@@ -123,6 +181,53 @@ impl Tok<'_> {
         }
         .into()
     }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Tok::Num(slice)
+            | Tok::Literal(slice)
+            | Tok::True(slice)
+            | Tok::False(slice)
+            | Tok::StringLitSingle(slice)
+            | Tok::StringLitDouble(slice)
+            | Tok::TripleDoubleQuote(slice)
+            | Tok::TripleSingleQuote(slice)
+            | Tok::And(slice)
+            | Tok::Or(slice)
+            | Tok::Not(slice)
+            | Tok::Xor(slice)
+            | Tok::LineComment(slice)
+            | Tok::BlockComment(slice)
+            | Tok::Eq(slice)
+            | Tok::Neq(slice)
+            | Tok::Leq(slice)
+            | Tok::Geq(slice)
+            | Tok::LineContinuation(slice)
+            | Tok::Newline(slice)
+            | Tok::Return(slice)
+            | Tok::TrailingBackslash(slice)
+            | Tok::Whitespace(slice) => slice.len(),
+
+            Tok::Plus
+            | Tok::Minus
+            | Tok::Star
+            | Tok::Slash
+            | Tok::Percent
+            | Tok::Caret
+            | Tok::Lt
+            | Tok::Gt
+            | Tok::Dollar
+            | Tok::LParen
+            | Tok::RParen
+            | Tok::LBrace
+            | Tok::RBrace
+            | Tok::Assign
+            | Tok::Comma
+            | Tok::Pipe
+            | Tok::At => 1,
+            Tok::__Test_Eof => 0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -154,11 +259,18 @@ mod tests {
 
     #[test]
     fn test_arithmetic() {
-        expect_tokens("1 + 2.3    ", &[
-            Num("1"), Whitespace(" "),
-            Plus, Whitespace(" "),
-            Num("2.3"), Whitespace(" ".repeat(4).as_str()),
-            __Test_Eof]);
+        expect_tokens(
+            "1 + 2.3    ",
+            &[
+                Num("1"),
+                Whitespace(" "),
+                Plus,
+                Whitespace(" "),
+                Num("2.3"),
+                Whitespace(" ".repeat(4).as_str()),
+                __Test_Eof,
+            ],
+        );
         expect_tokens("1_000_000", &[Num("1_000_000"), __Test_Eof]);
         expect_tokens(
             "+-*/%^",
@@ -175,102 +287,195 @@ mod tests {
 on multiple
 lines-//5
 6"#,
-            &[Num("1"), LineComment("//normal comment"), Newline("\n"),
-            Num("2"), BlockComment("//-multiline on single line-//"), Num("3"), Newline("\n"),
-                Num("4"), BlockComment("//-multiline\non multiple\nlines-//"), Num("5"), Newline("\n"),
-                Num("6"), __Test_Eof]
+            &[
+                Num("1"),
+                LineComment("//normal comment"),
+                Newline("\n"),
+                Num("2"),
+                BlockComment("//-multiline on single line-//"),
+                Num("3"),
+                Newline("\n"),
+                Num("4"),
+                BlockComment("//-multiline\non multiple\nlines-//"),
+                Num("5"),
+                Newline("\n"),
+                Num("6"),
+                __Test_Eof,
+            ],
         )
     }
 
     #[test]
     fn test_others() {
-        expect_tokens("()$=,|@", &[LParen, RParen, Dollar, Assign, Comma, Pipe, At, __Test_Eof]);
+        expect_tokens(
+            "()$=,|@{ x }",
+            &[
+                LParen,
+                RParen,
+                Dollar,
+                Assign,
+                Comma,
+                Pipe,
+                At,
+                LBrace,
+                Whitespace(" "),
+                Literal("x"),
+                Whitespace(" "),
+                RBrace,
+                __Test_Eof,
+            ],
+        );
     }
 
     #[test]
     fn test_booleans() {
-        expect_tokens("true false", &[True("true"), Whitespace(" "), False("false"), __Test_Eof]);
-        expect_tokens("and not or xor < > <= >=", &[And("and"), Whitespace(" "), Not("not"), Whitespace(" "), Or("or"), Whitespace(" "), Xor("xor"), Whitespace(" "), Lt, Whitespace(" "), Gt, Whitespace(" "), Leq("<="), Whitespace(" "), Geq(">="), __Test_Eof]);
+        expect_tokens(
+            "true false",
+            &[True("true"), Whitespace(" "), False("false"), __Test_Eof],
+        );
+        expect_tokens(
+            "and not or xor < > <= >=",
+            &[
+                And("and"),
+                Whitespace(" "),
+                Not("not"),
+                Whitespace(" "),
+                Or("or"),
+                Whitespace(" "),
+                Xor("xor"),
+                Whitespace(" "),
+                Lt,
+                Whitespace(" "),
+                Gt,
+                Whitespace(" "),
+                Leq("<="),
+                Whitespace(" "),
+                Geq(">="),
+                __Test_Eof,
+            ],
+        );
         // keyword match is exact
-        expect_tokens("organic andnot", &[Literal("organic"), Whitespace(" "), Literal("andnot"), __Test_Eof]);
-    }
-
-    #[test]
-    fn test_braces() {
-        let tokens: Vec<_> = Tok::lexer("{ x }")
-            .map(|r| r.unwrap())
-            .collect();
-        assert_eq!(tokens, vec![
-            LBrace,
-            Whitespace(" "),
-            Literal("x"),
-            Whitespace(" "),
-            RBrace,
-        ]);
+        expect_tokens(
+            "organic andnot",
+            &[
+                Literal("organic"),
+                Whitespace(" "),
+                Literal("andnot"),
+                __Test_Eof,
+            ],
+        );
     }
 
     #[test]
     fn test_newline() {
-        let tokens: Vec<_> = Tok::lexer("1\n2")
-            .map(|r| r.unwrap())
-            .collect();
-        assert_eq!(tokens, vec![
-            Num("1"),
-            Newline("\n"),
-            Num("2"),
-        ]);
+        expect_tokens("1\n2", &[Num("1"), Newline("\n"), Num("2"), __Test_Eof]);
     }
 
     #[test]
     fn test_newline_with_indent() {
-        let tokens: Vec<_> = Tok::lexer("1\n    2")
-            .map(|r| r.unwrap())
-            .collect();
-        assert_eq!(tokens, vec![
-            Num("1"),
-            Newline("\n    "),
-            Num("2"),
-        ]);
+        expect_tokens(
+            "1\n    2",
+            &[Num("1"), Newline("\n    "), Num("2"), __Test_Eof],
+        );
     }
 
     #[test]
     fn test_line_continuation() {
-        let tokens: Vec<_> = Tok::lexer("1 +\\\n    2")
-            .map(|r| r.unwrap())
-            .collect();
-        assert_eq!(tokens, vec![
-            Num("1"),
-            Whitespace(" "),
-            Plus,
-            LineContinuation("\\\n    "),
-            Num("2"),
-        ]);
+        expect_tokens(
+            "1 +\\\n    2",
+            &[
+                Num("1"),
+                Whitespace(" "),
+                Plus,
+                LineContinuation("\\\n    "),
+                Num("2"),
+                __Test_Eof,
+            ],
+        );
     }
 
     #[test]
     fn test_line_continuation_before_newline() {
         // 1\n    + 2 with continuation
-        let tokens: Vec<_> = Tok::lexer("1\\\n    + 2")
-            .map(|r| r.unwrap())
-            .collect();
-        assert_eq!(tokens, vec![
-            Num("1"),
-            LineContinuation("\\\n    "),
-            Plus,
-            Whitespace(" "),
-            Num("2"),
-        ]);
+        expect_tokens(
+            "1\\\n    + 2",
+            &[
+                Num("1"),
+                LineContinuation("\\\n    "),
+                Plus,
+                Whitespace(" "),
+                Num("2"),
+                __Test_Eof,
+            ],
+        );
     }
 
     #[test]
     fn test_return_keyword() {
-        let tokens: Vec<_> = Tok::lexer("return 42")
-            .map(|r| r.unwrap())
-            .collect();
-        assert_eq!(tokens, vec![
-            Return("return"),
-            Whitespace(" "),
-            Num("42"),
-        ]);
+        expect_tokens(
+            "return 42",
+            &[Return("return"), Whitespace(" "), Num("42"), __Test_Eof],
+        );
+    }
+
+    #[test]
+    fn test_string_double_quotes() {
+        expect_tokens(r#""hello""#, &[StringLitDouble(r#""hello""#), __Test_Eof]);
+    }
+
+    #[test]
+    fn test_string_single_quotes() {
+        expect_tokens(r#"'hello'"#, &[StringLitSingle(r#"'hello'"#), __Test_Eof]);
+    }
+
+    #[test]
+    fn test_string_with_interpolation_braces() {
+        // Lexer just captures the whole string, braces and all
+        expect_tokens(
+            r#""hello {name}""#,
+            &[StringLitDouble(r#""hello {name}""#), __Test_Eof],
+        );
+    }
+
+    #[test]
+    fn test_nested_quotes() {
+        // Double quotes containing single quotes in interpolation
+        expect_tokens(
+            r#""hello {'world'}""#,
+            &[StringLitDouble(r#""hello {'world'}""#), __Test_Eof],
+        );
+    }
+    #[test]
+    fn test_multiline_closed() {
+        // Double quotes containing single quotes in interpolation
+        expect_tokens(
+            r#""""hello\#
+world""""#,
+            &[TripleDoubleQuote("\"\"\"hello\\#\nworld\"\"\""), __Test_Eof],
+        );
+    }
+
+    #[test]
+    fn test_multiline_open() {
+        // Double quotes containing single quotes in interpolation
+        expect_tokens(
+            r#""""hello\#
+world"#,
+            &[TripleDoubleQuote("\"\"\"hello\\#\nworld"), __Test_Eof],
+        );
+    }
+
+    #[test]
+    fn test_trailing_backslash() {
+        expect_tokens(
+            r#"3 +\"#,
+            &[
+                Num("3"),
+                Whitespace(" "),
+                Plus,
+                TrailingBackslash("\\"),
+                __Test_Eof,
+            ],
+        );
     }
 }

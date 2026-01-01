@@ -8,6 +8,7 @@ use miette::{GraphicalReportHandler, GraphicalTheme};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use crate::lexer::Tok;
+use crate::lexer::Tok::TrailingBackslash;
 
 pub struct Repl {
     show_python: bool,
@@ -112,18 +113,47 @@ impl Repl {
     fn analyze_input(input: &str) -> (i32, bool) {
         let mut indent_level = 0i32;
         let mut has_continuation = false;
+        let mut in_unclosed_string = false;
 
-        for token in Tok::lexer(input) {
+        let lex = Tok::lexer(input);
+
+        for token in lex.clone() {
             match token {
-                Ok(Tok::LBrace) => indent_level += 1,
-                Ok(Tok::RBrace) => indent_level -= 1,
-                Ok(Tok::LineContinuation(_)) => has_continuation = true,
-                Ok(Tok::Newline(_)) => has_continuation = false,
-                Ok(_) => has_continuation = false,
-                Err(_) => {} // parser will catch this later anyways
+                Ok(Tok::LBrace) => {
+                    indent_level += 1;
+                    has_continuation = false;
+                }
+                Ok(Tok::RBrace) => {
+                    indent_level -= 1;
+                    has_continuation = false;
+                }
+                Ok(Tok::LineContinuation(_)) => {
+                    has_continuation = true;
+                }
+                Ok(Tok::Newline(_)) => {
+                    has_continuation = false;
+                }
+                Ok(Tok::TripleDoubleQuote(s)) => {
+                    in_unclosed_string = !s.ends_with("\"\"\"") || s.len() < 6;
+                    has_continuation = false;
+                }
+                Ok(Tok::TripleSingleQuote(s)) => {
+                    in_unclosed_string = !s.ends_with("'''") || s.len() < 6;
+                    has_continuation = false;
+                }
+                Ok(_) => {
+                    has_continuation = false;
+                }
+                Err(_) => {}
             }
         }
-        (indent_level, has_continuation)
+        if let Some(Ok(TrailingBackslash(_))) = lex.last() {
+            has_continuation = true;
+        }
+
+        let effective_indent = if in_unclosed_string { 0 } else { indent_level };
+        let needs_more = indent_level > 0 || has_continuation || in_unclosed_string;
+        (effective_indent, needs_more)
     }
 
     fn make_continuation_prompt(&self, indent_level: usize, has_continuation: bool) -> String {

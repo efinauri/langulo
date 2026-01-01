@@ -1,3 +1,4 @@
+use std::cmp::{max, min};
 use crate::errors::LanguloError;
 use crate::errors::LanguloResult;
 use crate::lexer::Tok;
@@ -246,7 +247,10 @@ impl<'src> Parser<'src> {
         self.parse_prefix()?;
 
         loop {
-            let next_precedence = self.peek_meaningful_token_or_eof_err()?.precedence();
+            let next_precedence = match self.peek_meaningful_token()? {
+                Some(tok) => tok.precedence(),
+                None => break,
+            };
             if next_precedence <= precedence {
                 break;
             }
@@ -398,7 +402,7 @@ impl<'src> Parser<'src> {
     /// moves the lexer forward to the next statement, if there's any, in the scope
     /// (e.g., the root scope or a block scope) that's being parsed.
     fn skip_newlines(&mut self) -> LanguloResult<()> {
-        while let Tok::Newline(slice) = self.peek_meaningful_token_or_eof_err()? {
+        while let Some(Tok::Newline(slice)) = self.peek_meaningful_token()? {
             self.current_offset += slice.len();
             self.next_meaningful_token()?;
         }
@@ -522,64 +526,51 @@ impl<'src> Parser<'src> {
         Ok(())
     }
 
+    /// Produces a [StringLit node](AstNode::StringLit).
+    ///
+    /// `"an {interpolated} string {literal}"` gets parsed into
+    ///
+    /// ```StringLit
+    ///         StringPart          //an
+    ///         InterpolationPart   // {interpolated}
+    ///         StringPart          // string,
+    ///         InterpolationPart   // {literal}
+    /// ```
     fn parse_string_content(
         &mut self,
         content_start: usize,
         content_end: usize,
-        quote: &str,
+        quote: &str, // one of ", ', """ or '''
     ) -> LanguloResult<()> {
         self.ast_builder.start_node(AstNode::StringLit.into());
 
         let content = &self.source[content_start..content_end];
-        let mut idx = 0;
-        let mut part_start = 0;
         let bytes = content.as_bytes();
+        let mut is_slice_interpolation = false;
+        let mut slice_start = 0;
 
-        while idx < bytes.len() {
-            if bytes[idx] == b'\\' {
-                // Escape sequence - skip next char
-                idx += 1;
-                if idx < bytes.len() {
-                    idx += 1;
-                }
-            } else if bytes[idx] == b'{' {
-                // Flush current string part if non-empty
-                if idx > part_start {
-                    self.add_string_part(&content[part_start..idx], quote);
-                }
-
-                // Find matching }
-                let expr_start = idx + 1;
-                let mut brace_depth = 1;
-                idx += 1;
-                while idx < bytes.len() && brace_depth > 0 {
-                    if bytes[idx] == b'{' {
-                        brace_depth += 1;
-                    } else if bytes[idx] == b'}' {
-                        brace_depth -= 1;
-                    }
-                    if brace_depth > 0 {
-                        idx += 1;
-                    }
-                }
-                let expr_end = idx;
-                idx += 1; // skip closing }
-                part_start = idx;
-
-                // Parse interpolation using slice of original source
-                let expr_slice_start = content_start + expr_start;
-                let expr_slice_end = content_start + expr_end;
-                self.parse_interpolation(expr_slice_start, expr_slice_end)?;
-            } else {
-                idx += 1;
-            }
+        let mut i = 0;
+        while i < bytes.len() {
+            let increment = match (bytes[i], is_slice_interpolation) {
+                (b'\\', _) => 2, // skip both \ and the char it's escaping
+                (b'{', false) => { // entering interpolation - flush current string part if any
+                    self.add_string_part(&content[slice_start..i], quote);
+                    is_slice_interpolation = true;
+                    slice_start = i + 2; // 2 and not 1 to also skip opening {
+                    1
+                },
+                (b'}', true) => { // exiting interpolation - flush interpolation part
+                    is_slice_interpolation = false;
+                    self.parse_interpolation(slice_start, i + 1)?;
+                    slice_start = i + 1;
+                    1
+                },
+                _ => 1
+            };
+            i = min(i + increment, content_end);
         }
-
-        // Flush remaining string part
-        if idx > part_start {
-            self.add_string_part(&content[part_start..idx], quote);
-        }
-
+        // add any potential leftover string part
+        self.add_string_part(&content[slice_start..i], quote);
         self.ast_builder.finish_node();
         Ok(())
     }
@@ -1214,11 +1205,21 @@ mod tests {
     }
 
     #[test]
+    fn test_only_iterpolation() {
+        expect_ast(AstExpectation {
+            source: r#""{x}""#,
+            nodes: &[Root, StringLit, StringPart, InterpolationPart, Literal, StringPart],
+            children: &[&[1, 2, 3, 5], &[3, 4]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
     fn test_string_with_interpolation() {
         expect_ast(AstExpectation {
             source: r#""hello {name}""#,
-            nodes: &[Root, StringLit, StringPart, InterpolationPart, Literal],
-            children: &[&[1, 2, 3], &[3, 4]],
+            nodes: &[Root, StringLit, StringPart, InterpolationPart, Literal, StringPart],
+            children: &[&[1, 2, 3, 5], &[3, 4]],
             ..Default::default()
         });
     }
@@ -1255,8 +1256,9 @@ mod tests {
                 Add,
                 Num,
                 Num,
+                StringPart,
             ],
-            children: &[&[1, 2, 3], &[3, 4], &[4, 5, 6]],
+            children: &[&[1, 2, 3, 7], &[3, 4], &[4, 5, 6]],
             ..Default::default()
         });
     }
@@ -1273,8 +1275,9 @@ mod tests {
                 InterpolationPart,
                 StringLit,
                 StringPart,
+                StringPart,
             ],
-            children: &[&[1, 2, 3], &[3, 4], &[4, 5]],
+            children: &[&[1, 2, 3, 6], &[3, 4], &[4, 5]],
             ..Default::default()
         });
     }

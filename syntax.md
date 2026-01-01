@@ -177,18 +177,19 @@ plus
 
 ## OPTIONS AND IF/ELSE
 
-cannot decide how to make definition of an empty option type safe without introducing type annotations everywhere
-(and in the first place, do options make sense without static typing)
-
-if/else are solid
-
 ```
 // an option is an explicit way to indicate that a value could be missing
-some_num = 2? // contains a num
-no_num = empty
+some_num = 2!
+no_num = ?
+[1, 2, 3][0] // 1!
+[1, 2, 3][4] // ?
+if false 1 // ?, with lazy evaluation of the body
+2! else 3 // 2
+// streaked together, if <cond> <expr1> else <expr2> behaves like expected
 
 
-// "if" is a way to define an option relative to a boolean condition
+
+// "if" is a way to w to a boolean condition
 maybe_number = if true 1 // --> 1?
 // else unwraps an option safely, giving a fallback value if the option is empty
 some_number = maybe_number else 2

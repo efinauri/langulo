@@ -21,12 +21,12 @@ pub fn init_python() -> LanguloResult<()> {
         let globals = PyDict::new(py);
 
         let math = py.import("math").map_err(|e| LanguloError::PythonError {
-            message: format!("Failed to import math: {}", e),
+            _message: format!("Failed to import math: {}", e),
         })?;
         globals
             .set_item("math", math)
             .map_err(|e| LanguloError::PythonError {
-                message: format!("Failed to set math in globals: {}", e),
+                _message: format!("Failed to set math in globals: {}", e),
             })?;
 
         let _ = PYTHON_GLOBALS.set(globals.into());
@@ -46,7 +46,7 @@ pub fn eval_python_internal(code: &str, globals: &Py<PyDict>) -> LanguloResult<E
 
         if lines.is_empty() {
             return Err(LanguloError::PythonError {
-                message: "Empty code".into(),
+                _message: "Empty code".into(),
             });
         }
 
@@ -55,7 +55,7 @@ pub fn eval_python_internal(code: &str, globals: &Py<PyDict>) -> LanguloResult<E
             let statements = lines[..lines.len() - 1].join("\n");
             py.run(&statements, Some(globals), None)
                 .map_err(|e| LanguloError::PythonError {
-                    message: format!("Statement error: {}", e),
+                    _message: format!("Statement error: {}", e),
                 })?;
         }
 
@@ -79,7 +79,7 @@ pub fn eval_python_internal(code: &str, globals: &Py<PyDict>) -> LanguloResult<E
                 Ok(EvalResult { display, py_type })
             }
             Err(e) => Err(LanguloError::PythonError {
-                message: format!("{}", e),
+                _message: format!("{}", e),
             }),
         }
     })
@@ -90,13 +90,13 @@ pub fn exec_python(code: &str) -> LanguloResult<()> {
         let globals = PYTHON_GLOBALS
             .get()
             .ok_or_else(|| LanguloError::PythonError {
-                message: "Python not initialized".into(),
+                _message: "Python not initialized".into(),
             })?
             .as_ref(py);
 
         py.run(code, Some(globals), None)
             .map_err(|e| LanguloError::PythonError {
-                message: format!("{}", e),
+                _message: format!("{}", e),
             })
     })
 }
@@ -106,7 +106,7 @@ pub fn get_variable(name: &str) -> LanguloResult<Option<String>> {
         let globals = PYTHON_GLOBALS
             .get()
             .ok_or_else(|| LanguloError::PythonError {
-                message: "Python not initialized".into(),
+                _message: "Python not initialized".into(),
             })?
             .as_ref(py);
 
@@ -119,7 +119,7 @@ pub fn get_variable(name: &str) -> LanguloResult<Option<String>> {
             )),
             Ok(None) => Ok(None),
             Err(e) => Err(LanguloError::PythonError {
-                message: format!("Failed to get variable {}: {}", name, e),
+                _message: format!("Failed to get variable {}: {}", name, e),
             }),
         }
     })
@@ -139,10 +139,10 @@ mod tests {
     fn eval_langulo(source: &str) -> LanguloResult<EvalResult> {
         setup();
         let ast = parse(source).map_err(|e| LanguloError::PythonError {
-            message: format!("Parse error: {:?}", e),
+            _message: format!("Parse error: {:?}", e),
         })?;
-        let python_code = transpile(&ast).map_err(|e| LanguloError::PythonError {
-            message: format!("Transpile error: {:?}", e),
+        let python_code = transpile(&ast, source).map_err(|e| LanguloError::PythonError {
+            _message: format!("Transpile error: {:?}", e),
         })?;
         println!("Transpiled to:\n{}", python_code);
         eval_python(&python_code)

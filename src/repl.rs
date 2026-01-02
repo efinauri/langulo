@@ -1,4 +1,7 @@
+use std::cmp::max;
 use crate::errors::{LanguloError, LanguloResult};
+use crate::lexer::Tok;
+use crate::lexer::Tok::TrailingBackslash;
 use crate::parser::parse;
 use crate::runtime::{eval_python, init_python};
 use crate::transpile::transpile;
@@ -7,8 +10,6 @@ use logos::Logos;
 use miette::{GraphicalReportHandler, GraphicalTheme};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
-use crate::lexer::Tok;
-use crate::lexer::Tok::TrailingBackslash;
 
 pub struct Repl {
     show_python: bool,
@@ -29,16 +30,19 @@ impl Repl {
         println!(
             "{} {}",
             "Langulo REPL".magenta().bold(),
-            "v0.1.0".dimmed() // todo read version from cargo
+            format!("v{}", env!("CARGO_PKG_VERSION")).dimmed()
         );
-        println!("{}", "Type expressions to evaluate. Ctrl+D to exit.".dimmed());
+        println!(
+            "{}",
+            "Type expressions to evaluate. Ctrl+D to exit.".dimmed()
+        );
         if self.show_python {
             println!("{}", "(Showing transpiled Python)".yellow().dimmed());
         }
         println!();
 
         self.repl_loop().map_err(|e| LanguloError::InternalError {
-            message: format!("REPL error: {}", e),
+            _message: format!("REPL error: {}", e),
         })
     }
 
@@ -86,31 +90,30 @@ impl Repl {
 
     fn read_complete_input(&self, rl: &mut DefaultEditor) -> Result<Option<String>, ReadlineError> {
         let prompt = ">>> ".cyan().bold().to_string();
-        let first_line = rl.readline(&prompt)?;
+        let mut user_input = rl.readline(&prompt)?;
 
-        let trimmed = first_line.trim();
-        if trimmed.is_empty() {
+        if user_input.trim().is_empty() {
             return Ok(None);
         }
 
-        let mut input = first_line;
-
         loop {
-            let (indent_level, has_continuation) = Self::analyze_input(&input);
+            let (indent_level, has_continuation) = Self::analyze_input(&user_input);
             if indent_level <= 0 && !has_continuation {
                 break;
-            } // else need more input
-            let continuation_prompt = self.make_continuation_prompt(indent_level.max(0) as usize, has_continuation);
-            let next_line = rl.readline(&continuation_prompt)?;
-
-            input.push('\n');
-            input.push_str(&next_line);
+            } // else grow partial user input
+            let continuation_prompt =
+                self.make_continuation_prompt(indent_level);
+            user_input.push('\n');
+            user_input.push_str(&rl.readline(&continuation_prompt)?);
         }
 
-        Ok(Some(input))
+        Ok(Some(user_input))
     }
 
-    fn analyze_input(input: &str) -> (i32, bool) {
+    /// determines if the user is passing a partial input they intend to grow with other lines.
+    /// this includes opening and not closing a multiline string, a grouping expression, explicitly
+    /// adding a line break, etc. etc.
+    fn analyze_input(input: &str) -> (usize, bool) {
         let mut indent_level = 0i32;
         let mut has_continuation = false;
         let mut in_unclosed_string = false;
@@ -151,22 +154,22 @@ impl Repl {
             has_continuation = true;
         }
 
-        let effective_indent = if in_unclosed_string { 0 } else { indent_level };
         let needs_more = indent_level > 0 || has_continuation || in_unclosed_string;
-        (effective_indent, needs_more)
+
+        if needs_more {
+            indent_level = max(indent_level, 1);
+        }
+        if in_unclosed_string {
+            indent_level = 0
+        }
+        (max(indent_level, 0i32) as usize, needs_more)
     }
 
-    fn make_continuation_prompt(&self, indent_level: usize, has_continuation: bool) -> String {
+    fn make_continuation_prompt(&self, indent_level: usize) -> String {
         let dots = "... ".cyan().to_string();
-        let effective_indent = if has_continuation && indent_level == 0 {
-            1
-        } else {
-            indent_level
-        };
-        let indent = dots.repeat(effective_indent);
+        let indent = dots.repeat(indent_level);
         format!("{}{}", dots, indent)
     }
-
 
     fn eval_line(&mut self, input: &str) {
         let ast = match parse(input) {
@@ -177,7 +180,7 @@ impl Repl {
             }
         };
 
-        let python_code = match transpile(&ast) {
+        let python_code = match transpile(&ast, input) {
             Ok(code) => code,
             Err(e) => {
                 self.print_error(&e);

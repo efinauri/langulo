@@ -5,7 +5,7 @@ use logos::{Lexer, Logos};
 pub enum Tok<'a> {
     #[regex(r"[a-zA-Z][a-zA-Z_]*")]
     Literal(&'a str),
-    #[regex(r"[0-9_]+(\.[0-9_]+)?")]
+    #[regex(r"[0-9][0-9_]*(\.[0-9_]+)?")]
     Num(&'a str),
     #[regex(r#""([^"\\]|\\.)*""#)]
     StringLitDouble(&'a str),

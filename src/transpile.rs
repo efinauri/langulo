@@ -1,16 +1,17 @@
 use crate::errors::{LanguloError, LanguloResult};
-use crate::parser::{AstNode, LanguloSyntaxNode, has_print_marker};
+use crate::parser::{has_print_marker, AstNode, LanguloSyntaxNode};
 use std::collections::HashSet;
 use std::string::ToString;
+use miette::SourceSpan;
 
 const HIDDEN_VARIABLE_PREFIX: &'static str = "h";
 const USER_LITERAL_PREFIX: &'static str = "uu"; // double to avoid hitting potential reserved keywords
 const USER_AT_VAR: &'static str = "ua";
 
-pub fn transpile(ast: &LanguloSyntaxNode) -> LanguloResult<String> {
-    let mut transpiler = Transpiler::new();
+pub fn transpile(ast: &LanguloSyntaxNode, source: &str) -> LanguloResult<String> {
+    let mut transpiler = Transpiler::new(source);
     transpiler.visit(ast)?;
-    Ok(transpiler.finish())
+    transpiler.finish()
 }
 
 /// a static piece of python code that implements language constructs
@@ -74,51 +75,63 @@ impl PythonEmitter {
         }
     }
 
-    fn current_scope_mut(&mut self) -> &mut Scope {
-        self.scopes.last_mut().expect("No active scope")
+    fn current_scope_mut(&mut self) -> LanguloResult<&mut Scope> {
+        self.scopes.last_mut().ok_or(LanguloError::InternalError {
+            _message: "No active scope".to_string(),
+        })
     }
 
     fn push_scope(&mut self) {
         self.scopes.push(Scope::new());
     }
 
-    fn pop_scope(&mut self) -> Scope {
-        assert!(self.scopes.len() > 1);
-        self.scopes.pop().expect("Cannot pop last scope")
+    fn pop_scope(&mut self) -> LanguloResult<Scope> {
+        self.scopes.pop().ok_or(LanguloError::InternalError {
+            _message: "Attempted to remove main scope".to_string(),
+        })
     }
 
-    fn grow_current_line_with(&mut self, code: &str) {
-        self.current_scope_mut().current_line.push_str(code);
+    fn grow_current_line_with(&mut self, code: &str) -> LanguloResult<()> {
+        self.current_scope_mut()?.current_line.push_str(code);
+        Ok(())
     }
 
     fn indentation(&self) -> String {
         "    ".repeat(self.indent)
     }
 
-    fn finish_current_line(&mut self) {
+    fn finish_current_line(&mut self) -> LanguloResult<()> {
         let indent = self.indentation();
-        let scope = self.current_scope_mut();
-        assert!(
-            !scope.current_line.is_empty(),
-            "tried to finalize an empty line"
-        );
-        assert!(
-            scope.checkpoints.is_empty(),
-            "cannot finalize line: there are unresolved checkpoints relative to it"
-        );
+        let scope = self.current_scope_mut()?;
+        if scope.current_line.is_empty() {
+            return Err(LanguloError::InternalError {
+                _message: "tried to finalize am empty line".into(),
+            });
+        }
+        if !scope.checkpoints.is_empty() {
+            return Err(LanguloError::InternalError {
+                _message: "tried to finalize a line with unresolved checkpoints".into(),
+            });
+        }
         scope
             .lines
             .push(format!("{}{}", indent, scope.current_line));
         scope.current_line.clear();
+        Ok(())
     }
 
     fn increase_indentation(&mut self) {
         self.indent += 1;
     }
 
-    fn decrease_indentation(&mut self) {
-        assert!(self.indent > 0);
+    fn decrease_indentation(&mut self) -> LanguloResult<()> {
+        if self.indent == 0 {
+            return Err(LanguloError::InternalError {
+                _message: "tried to decrease indentation below base".into(),
+            })
+        }
         self.indent -= 1;
+        Ok(())
     }
 
     fn require_helper(&mut self, helper: HelperFunction) {
@@ -131,85 +144,113 @@ impl PythonEmitter {
         name
     }
 
-    fn mark_checkpoint(&mut self) {
-        let scope = self.current_scope_mut();
+    fn mark_checkpoint(&mut self) -> LanguloResult<()> {
+        let scope = self.current_scope_mut()?;
         scope.checkpoints.push(scope.current_line.len());
+        Ok(())
     }
 
-    fn add_full_line_before_current(&mut self, line: &str) {
+    fn add_full_line_before_current(&mut self, line: &str) -> LanguloResult<()> {
         let indent = self.indentation();
-        self.current_scope_mut()
+        self.current_scope_mut()?
             .lines
             .push(format!("{}{}", indent, line));
+        Ok(())
     }
     /// resolves the topmost checkpoint of the topmost scope by:
     /// - cutting up the [current_line](Scope) slice from the checkpoint onwards;
     /// - making it a variable assignment;
     /// - putting it into the translated python code before `current_line`
-    fn resolve_checkpoint_to_var(&mut self, var: &String) {
-        let scope = self.current_scope_mut();
-        assert!(!scope.checkpoints.is_empty());
-        let start = scope.checkpoints.pop().unwrap();
-        assert!(scope.current_line.len() >= start);
+    fn resolve_checkpoint_to_var(&mut self, var: &String) -> LanguloResult<()> {
+        let scope = self.current_scope_mut()?;
+        let start = scope.checkpoints.pop().ok_or(LanguloError::InternalError {
+            _message: "Tried to resolve checkpoint without any actual checkpoints".to_string(),
+        })?;
+        if scope.current_line.len() <= start {
+            return Err(LanguloError::InternalError {
+                _message: format!(
+                    "Tried to resolve checkpoint at index {} but line is only {} chars long",
+                    start, scope.current_line.len()
+                ),
+            });
+        }
         let expr = scope.current_line[start..].to_string();
         scope.current_line.truncate(start);
-        self.add_full_line_before_current(&format!("{} = {}", var, expr));
+        self.add_full_line_before_current(&format!("{} = {}", var, expr))
     }
 
     /// calls [PythonEmitter::resolve_checkpoint_to_var] with an internal variable.
     ///
     /// returns the variable name that was used.
-    fn resolve_checkpoint_to_hidden_var(&mut self) -> String {
+    fn resolve_checkpoint_to_hidden_var(&mut self) -> LanguloResult<String> {
         let hid = self.fresh_hidden_var();
-        self.resolve_checkpoint_to_var(&hid);
-        hid
+        self.resolve_checkpoint_to_var(&hid)?;
+        Ok(hid)
     }
 
-    fn print(&mut self, var: &String) {
-        self.add_full_line_before_current(format!("_print({})", var).as_str());
+    fn print(&mut self, var: &String) -> LanguloResult<()> {
+        self.add_full_line_before_current(format!("_print({})", var).as_str())
     }
 
     /// emits the complete python code
-    fn finish(mut self) -> String {
-        assert_eq!(self.scopes.len(), 1, "Unbalanced scopes");
+    fn finish(mut self) -> LanguloResult<String> {
+        if self.scopes.len() != 1 {
+            return Err(LanguloError::InternalError {
+                _message: "Tried to finish emitter with unbalanced scopes".to_string(),
+            });
+        }
 
-        let indent = self.indentation();
-
-        let scope = self.current_scope_mut();
-        assert!(scope.checkpoints.is_empty(), "Unresolved checkpoints");
+        let mut scope = self.pop_scope()?;
+        if !scope.checkpoints.is_empty() {
+            return Err(LanguloError::InternalError {
+                _message: "Tried to finish emitter with unresolved checkpoints".to_string(),
+            });
+        }
 
         if !scope.current_line.is_empty() {
             scope
                 .lines
-                .push(format!("{}{}", indent, scope.current_line));
+                .push(format!("{}{}", self.indentation(), scope.current_line));
             scope.current_line.clear();
         }
 
         let mut output = String::new();
 
-        for helper in &self.helpers {
+        for helper in self.helpers {
             output.push_str(helper.definition());
             output.push_str("\n\n");
         }
 
-        output.push_str(&self.scopes.pop().unwrap().lines.join("\n"));
-        output
+        output.push_str(&scope.lines.join("\n"));
+
+        Ok(output)
     }
 }
 
 struct Transpiler {
     emitter: PythonEmitter,
+    source: String,
+    is_in_block: bool
 }
 
 impl Transpiler {
-    fn new() -> Self {
+    fn new(source: &str) -> Self {
         Self {
             emitter: PythonEmitter::new(),
+            source: source.to_string(),
+            is_in_block: false,
         }
     }
 
-    fn finish(self) -> String {
+    fn finish(self) -> LanguloResult<String> {
         self.emitter.finish()
+    }
+
+    fn node_span(&self, node: &LanguloSyntaxNode) -> SourceSpan {
+        let range = node.text_range();
+        let start: usize = range.start().into();
+        let len: usize = range.len().into();
+        (start, len).into()
     }
 
     fn literal_to_var(node: &LanguloSyntaxNode) -> String {
@@ -223,25 +264,35 @@ impl Transpiler {
         let should_print = has_print_marker(node);
         if should_print {
             self.emitter.require_helper(HelperFunction::Print);
-            self.emitter.mark_checkpoint();
+            self.emitter.mark_checkpoint()?;
         }
         self.visit_inner(node)?;
 
         if should_print {
-            let tmp = self.emitter.resolve_checkpoint_to_hidden_var();
-            self.emitter.print(&tmp);
-            self.emitter.grow_current_line_with(tmp.as_str());
+            let tmp = self.emitter.resolve_checkpoint_to_hidden_var()?;
+            self.emitter.print(&tmp)?;
+            self.emitter.grow_current_line_with(tmp.as_str())?;
         }
         Ok(())
     }
 
-    fn visit_lvalue(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<String> {
+    /// lvalue is any assignment target, mainly literals but also indexed arrays (in the case of
+    /// `x[1] = 2`).
+    ///
+    /// the main reason why lvalues are being handled in a separate method is to add some graceful
+    /// fallback logic in case they're being printed whilst being re still undefined:
+    ///
+    /// `$new = 1 // prints ("undefined variable `new`)"`
+    /// `$new = 2 // now would correctly print its previously assigned value, 1`
+    ///
+    fn get_lvalue_varname(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<String> {
         let should_print = has_print_marker(node);
 
         let target = match node.kind() {
             AstNode::Literal => Ok(Self::literal_to_var(node)),
-            _ => Err(LanguloError::TranspileError {
-                message: format!("Invalid assignment target: {:?}", node.kind()),
+            _ => Err(LanguloError::InvalidAssignmentTarget {
+                _src: self.source.clone(),
+                _span: self.node_span(node),
             }),
         }?;
 
@@ -249,17 +300,17 @@ impl Transpiler {
             self.emitter.require_helper(HelperFunction::Print);
             let tmp = self.emitter.fresh_hidden_var();
             self.emitter
-                .add_full_line_before_current(&format!("if not '{}' in vars():", target));
+                .add_full_line_before_current(&format!("if not '{}' in vars():", target))?;
             self.emitter.increase_indentation();
             self.emitter.add_full_line_before_current(&format!(
                 "{}='(undefined variable `{}`)'",
                 target,
                 node.text().to_string()
-            ));
-            self.emitter.decrease_indentation();
+            ))?;
+            self.emitter.decrease_indentation()?;
             self.emitter
-                .add_full_line_before_current(&format!("{} = {}", tmp, target));
-            self.emitter.print(&tmp);
+                .add_full_line_before_current(&format!("{} = {}", tmp, target))?;
+            self.emitter.print(&tmp)?;
         }
 
         Ok(target)
@@ -274,16 +325,18 @@ impl Transpiler {
             }
             AstNode::Literal => self
                 .emitter
-                .grow_current_line_with(&Transpiler::literal_to_var(node)),
+                .grow_current_line_with(&Transpiler::literal_to_var(node))?,
             AstNode::Num => {
                 let text = node.text().to_string();
                 let clean = text.replace('_', "");
                 if clean.is_empty() {
-                    return Err(LanguloError::TranspileError {
-                        message: format!("Invalid number literal: {}", text),
+                    return Err(LanguloError::InvalidNumber {
+                        _value: text,
+                        _src: self.source.clone(),
+                        _span: self.node_span(node),
                     });
                 }
-                self.emitter.grow_current_line_with(&text);
+                self.emitter.grow_current_line_with(&text)?;
             }
             AstNode::Bool => {
                 let text = node.text().to_string();
@@ -294,7 +347,7 @@ impl Transpiler {
                     .to_uppercase()
                     .collect::<String>()
                     + &text[1..];
-                self.emitter.grow_current_line_with(&capitalized);
+                self.emitter.grow_current_line_with(&capitalized)?;
             }
             AstNode::Not => self.visit_unary(node, "not ")?,
             AstNode::Add => self.visit_binary(node, " + ")?,
@@ -313,178 +366,227 @@ impl Transpiler {
             AstNode::Geq => self.visit_binary(node, " >= ")?,
             AstNode::Leq => self.visit_binary(node, " <= ")?,
             AstNode::Grouping => {
-                let child = node.first_child().ok_or(LanguloError::TranspileError {
-                    message: "Internal error: Grouping node has no children".to_string(),
+                let child = node.first_child().ok_or(LanguloError::InternalError {
+                    _message: "grouping node should have a child".to_string(),
                 })?;
-                self.emitter.grow_current_line_with("(");
+                self.emitter.grow_current_line_with("(")?;
                 self.visit(&child)?;
-                self.emitter.grow_current_line_with(")");
+                self.emitter.grow_current_line_with(")")?;
             }
             AstNode::Print => {
                 return Err(LanguloError::InternalError {
-                    message: "print nodes should never get visited after parsing".to_string(),
+                    _message: "print nodes should never get visited".to_string(),
                 });
             }
             AstNode::Assign => {
                 let children: Vec<_> = node.children().collect();
-                assert_eq!(children.len(), 2);
+                if children.len() != 2 {
+                    return Err(LanguloError::InternalError {
+                        _message: format!(
+                            "Assignment node found to have {} children",
+                            children.len()
+                        ),
+                    });
+                }
 
                 let var_node = &children[0];
                 let val_node = &children[1];
 
-                let lvalue = self.visit_lvalue(var_node)?;
+                let lvalue = self.get_lvalue_varname(var_node)?;
 
-                self.emitter.mark_checkpoint();
+                self.emitter.mark_checkpoint()?;
                 self.visit(val_node)?;
-                self.emitter.resolve_checkpoint_to_var(&lvalue);
-                self.emitter.grow_current_line_with(&lvalue);
+                self.emitter.resolve_checkpoint_to_var(&lvalue)?;
+                self.emitter.grow_current_line_with(&lvalue)?;
             }
             AstNode::FunctionDecl => {
                 self.visit_function(node)?;
             }
             AstNode::FunctionParams | AstNode::FunctionBody => {
                 return Err(LanguloError::InternalError {
-                    message: "FunctionParams/FunctionBody should not be visited directly"
+                    _message: "FunctionParams/FunctionBody should not be visited directly"
                         .to_string(),
                 });
             }
             AstNode::PrefixFnCall => {
                 let children: Vec<_> = node.children().collect();
+                if children.len() != 2 {
+                    return Err(LanguloError::InternalError {
+                        _message: format!(
+                            "PrefixFnCall node found to have {} children",
+                            children.len()
+                        ),
+                    });
+                }
                 let func = &children[0];
                 let args = &children[1];
 
                 self.visit(func)?;
-                self.emitter.grow_current_line_with("(");
+                self.emitter.grow_current_line_with("(")?;
 
-                let arg_exprs: Vec<_> = args.children().collect();
-                for (i, arg) in arg_exprs.iter().enumerate() {
+                for (i, arg) in args.children().enumerate() {
                     if i > 0 {
-                        self.emitter.grow_current_line_with(", ");
+                        self.emitter.grow_current_line_with(", ")?;
                     }
-                    self.visit(arg)?;
+                    self.visit(&arg)?;
                 }
-
-                self.emitter.grow_current_line_with(")");
+                self.emitter.grow_current_line_with(")")?;
             }
             AstNode::PostfixFnCall => {
+                // example: `at_value @ func(args)`
                 let children: Vec<_> = node.children().collect();
-                let at_value = &children[0];
-                let call = &children[1];
 
-                // call is a FunctionCall with children[0]=func, children[1]=args
+                if children.len() != 2 {
+                    return Err(LanguloError::InternalError {
+                        _message: format!(
+                            "PostfixFnCall node found to have {} children",
+                            children.len()
+                        ),
+                    });
+                }
+                let at_value = &children[0];
+                let call = &children[1]; // func(args)
+
                 let call_children: Vec<_> = call.children().collect();
+                if call_children.len() != 2 {
+                    return Err(LanguloError::InternalError {
+                        _message: format!(
+                            "PrefixFnCall node found to have {} children",
+                            children.len()
+                        ),
+                    });
+                }
                 let func = &call_children[0];
                 let args = &call_children[1];
 
+                // python translation is rearranged:
+                // `func(at_value, other_args)`
                 self.visit(func)?;
-                self.emitter.grow_current_line_with("(");
+                self.emitter.grow_current_line_with("(")?;
 
-                // First arg is the @ value
                 self.visit(at_value)?;
 
-                // Then the rest of the args
-                let arg_exprs: Vec<_> = args.children().collect();
-                for arg in arg_exprs.iter() {
-                    self.emitter.grow_current_line_with(", ");
-                    self.visit(arg)?;
+                for arg in args.children() {
+                    self.emitter.grow_current_line_with(", ")?;
+                    self.visit(&arg)?;
                 }
 
-                self.emitter.grow_current_line_with(")");
+                self.emitter.grow_current_line_with(")")?;
             }
 
             AstNode::CallArgs => {
                 return Err(LanguloError::InternalError {
-                    message: "CallArgs should not be visited directly".to_string(),
+                    _message: "CallArgs should not be visited directly".to_string(),
                 });
             }
 
             AstNode::Block => {
                 let children: Vec<_> = node.children().collect();
-                assert!(
-                    !children.is_empty(),
-                    "Empty block should have been caught by parser"
-                );
+                if children.is_empty() {
+                    return Err(LanguloError::InternalError {
+                        _message: "Empty block should have been caught by parser".to_string(),
+                    });
+                }
                 self.emitter.require_helper(HelperFunction::Return);
+                self.is_in_block = true;
 
+                // block is translated to a try/catch, you raise a returnException out of the scope
                 let result_var = self.emitter.fresh_hidden_var();
-                self.emitter.add_full_line_before_current("try:");
+                self.emitter.add_full_line_before_current("try:")?;
                 self.emitter.increase_indentation();
 
                 for (i, child) in children.iter().enumerate() {
                     let is_last = i == children.len() - 1;
 
-                    if is_last {
-                        self.emitter.mark_checkpoint();
+                    if is_last { // by default, always treated as a return
+                        self.emitter.mark_checkpoint()?;
                         self.visit(child)?;
-                        let val = self.emitter.resolve_checkpoint_to_hidden_var();
+                        let val = self.emitter.resolve_checkpoint_to_hidden_var()?;
                         self.emitter
-                            .add_full_line_before_current(&format!("{} = {}", result_var, val));
+                            .add_full_line_before_current(&format!("{} = {}", result_var, val))?;
                     } else {
-                        self.emitter.mark_checkpoint();
+                        self.emitter.mark_checkpoint()?;
                         self.visit(child)?;
-                        self.emitter.resolve_checkpoint_to_hidden_var();
+                        self.emitter.resolve_checkpoint_to_hidden_var()?;
                     }
                 }
 
-                self.emitter.decrease_indentation();
+                self.emitter.decrease_indentation()?;
                 self.emitter
-                    .add_full_line_before_current("except _Return as _r:");
+                    .add_full_line_before_current("except _Return as _r:")?;
                 self.emitter.increase_indentation();
                 self.emitter
-                    .add_full_line_before_current(&format!("{} = _r.value", result_var));
-                self.emitter.decrease_indentation();
+                    .add_full_line_before_current(&format!("{} = _r.value", result_var))?;
+                self.emitter.decrease_indentation()?;
 
-                self.emitter.grow_current_line_with(&result_var);
+                self.emitter.grow_current_line_with(&result_var)?;
+                self.is_in_block = false;
             }
 
             AstNode::Return => {
                 self.emitter.require_helper(HelperFunction::Return);
-                let child = node.first_child().ok_or(LanguloError::TranspileError {
-                    message: "Return node has no children".to_string(),
-                })?;
-                self.emitter.mark_checkpoint();
+                if !self.is_in_block {
+                    return Err(LanguloError::ReturnOutsideBlock {
+                        _src: self.source.clone(),
+                        _span: self.node_span(node),
+                    });
+                }
+
+                if node.children().count() != 1 {
+                    return Err(LanguloError::InternalError {
+                        _message: format!(
+                            "return node found to have operands: {:?}",
+                            node.children().map(|c| c.kind())
+                        ),
+                    });
+                }
+                let child = node.first_child().unwrap();
+                self.emitter.mark_checkpoint()?;
                 self.visit(&child)?;
-                let val = self.emitter.resolve_checkpoint_to_hidden_var();
+                let val = self.emitter.resolve_checkpoint_to_hidden_var()?;
                 self.emitter
-                    .add_full_line_before_current(&format!("raise _Return({})", val));
-                self.emitter.grow_current_line_with("None");
+                    .add_full_line_before_current(&format!("raise _Return({})", val))?;
+                self.emitter.grow_current_line_with("None")?;
             }
             AstNode::StringLit => {
                 let children: Vec<_> = node.children().collect();
 
                 if children.is_empty() {
-                    self.emitter.grow_current_line_with("\"\"");
+                    self.emitter.grow_current_line_with("\"\"")?;
                 } else if children.len() == 1 && children[0].kind() == AstNode::StringPart {
                     let text = children[0].text().to_string();
-                    self.emitter.grow_current_line_with(&text);
+                    self.emitter.grow_current_line_with(&text)?;
                 } else {
-                    self.emitter.grow_current_line_with("f\"");
+                    self.emitter.grow_current_line_with("f\"")?;
                     for child in children {
                         match child.kind() {
                             AstNode::StringPart => {
                                 let text = child.text().to_string();
                                 let content = &text[1..text.len() - 1];
-                                self.emitter.grow_current_line_with(content);
+                                self.emitter.grow_current_line_with(content)?;
                             }
                             AstNode::InterpolationPart => {
-                                self.emitter.grow_current_line_with("{");
+                                self.emitter.grow_current_line_with("{")?;
                                 let expr =
-                                    child.first_child().ok_or(LanguloError::TranspileError {
-                                        message: "InterpolationPart has no expression".to_string(),
+                                    child.first_child().ok_or(LanguloError::InternalError {
+                                        _message: "String interpolation without children nodes"
+                                            .into(),
+                                        // _src: self.source.clone(),
+                                        // _span: self.node_span(&child),
                                     })?;
                                 self.visit(&expr)?;
-                                self.emitter.grow_current_line_with("}");
+                                self.emitter.grow_current_line_with("}")?;
                             }
                             _ => {}
                         }
                     }
-                    self.emitter.grow_current_line_with("\"");
+                    self.emitter.grow_current_line_with("\"")?;
                 }
             }
 
             AstNode::StringPart | AstNode::InterpolationPart => {
                 return Err(LanguloError::InternalError {
-                    message: "StringPart/InterpolationPart should be handled by StringLit"
+                    _message: "StringPart/InterpolationPart should be handled by StringLit"
                         .to_string(),
                 });
             }
@@ -516,69 +618,74 @@ impl Transpiler {
             "def {}({}):",
             fn_name,
             params.join(", ")
-        ));
+        ))?;
         self.emitter.push_scope();
         self.emitter.increase_indentation();
 
-        let body_expr = body_node
-            .first_child()
-            .ok_or(LanguloError::TranspileError {
-                message: "Function body is empty".to_string(),
-            })?;
-        self.emitter.grow_current_line_with("return ");
+        let body_expr = body_node.first_child().ok_or(LanguloError::InternalError {
+            _message: "FunctionBody should have at least one child node".to_string(),
+        })?;
+        self.emitter.grow_current_line_with("return ")?;
         self.visit(&body_expr)?;
-        self.emitter.finish_current_line();
+        self.emitter.finish_current_line()?;
 
-        self.emitter.decrease_indentation();
+        self.emitter.decrease_indentation()?;
 
-        self.end_scope();
+        self.end_scope()?;
 
-        self.emitter.grow_current_line_with(&fn_name);
+        self.emitter.grow_current_line_with(&fn_name)?;
         Ok(())
     }
 
-    fn end_scope(&mut self) {
-        let scope = self.emitter.pop_scope();
+    fn end_scope(&mut self) -> LanguloResult<()> {
+        let scope = self.emitter.pop_scope()?;
         for line in scope.lines {
-            self.emitter.current_scope_mut().lines.push(line);
+            self.emitter.current_scope_mut()?.lines.push(line);
         }
+        Ok(())
     }
 
     fn visit_binary(&mut self, node: &LanguloSyntaxNode, op: &str) -> LanguloResult<()> {
         let children: Vec<_> = node.children().collect();
-        if children.len() != 2 {
-            return Err(LanguloError::TranspileError {
-                message: format!(
-                    "Binary operator {:?} expected 2 children, got {}",
+        if node.children().count() != 2 {
+            return Err(LanguloError::InternalError {
+                _message: format!(
+                    "Binary operator {:?} found to have operands {:?}",
                     node.kind(),
-                    children.len()
+                    node.children().map(|c| c.kind())
                 ),
             });
         }
 
-        self.emitter.grow_current_line_with("(");
+        self.emitter.grow_current_line_with("(")?;
         self.visit(&children[0])?;
-        self.emitter.grow_current_line_with(op);
+        self.emitter.grow_current_line_with(op)?;
         self.visit(&children[1])?;
-        self.emitter.grow_current_line_with(")");
+        self.emitter.grow_current_line_with(")")?;
         Ok(())
     }
 
     fn visit_unary(&mut self, node: &LanguloSyntaxNode, op: &str) -> LanguloResult<()> {
         if node.children().count() != 1 {
-            return Err(LanguloError::TranspileError {
-                message: format!(
-                    "Unary operator {:?} expected 1 child, got {}",
+            return Err(LanguloError::InternalError {
+                _message: format!(
+                    "Unary operator {:?} found to have operands {:?}",
                     node.kind(),
-                    node.children().count()
+                    node.children().map(|c| c.kind())
                 ),
             });
         }
+        assert_eq!(
+            node.children().count(),
+            1,
+            "Unary operator requires exactly 1 operand"
+        );
+
         let child = node.first_child().unwrap();
-        self.emitter.grow_current_line_with(op);
-        self.emitter.grow_current_line_with("(");
+        self.emitter.grow_current_line_with(op)?;
+        self.emitter.grow_current_line_with("(")?;
         self.visit(&child)?;
-        self.emitter.grow_current_line_with(")");
+        self.emitter.grow_current_line_with(")")?;
         Ok(())
     }
 }
@@ -590,7 +697,7 @@ mod tests {
 
     fn transpile_source(source: &str) -> String {
         let ast = parse(source).unwrap();
-        let result = transpile(&ast).unwrap();
+        let result = transpile(&ast, source).unwrap();
         println!("{}", result);
         result
     }

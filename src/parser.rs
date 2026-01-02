@@ -5,7 +5,7 @@ use crate::parser::AstNode::Root;
 use logos::{Lexer, Source};
 use miette::SourceSpan;
 use rowan::{Checkpoint, GreenNodeBuilder, NodeOrToken, SyntaxNode};
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::iter::Peekable;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -199,12 +199,12 @@ impl<'src> Parser<'src> {
                 Ok(tok)
             }
             Some(Err(())) => Err(LanguloError::LexerError {
-                src: self.source.into(),
-                span: (self.current_offset, 1).into(),
+                _src: self.source.into(),
+                _span: (self.current_offset, 0).into(),
             }),
             None => Err(LanguloError::UnexpectedEOF {
-                src: self.source.into(),
-                span: (self.current_offset, 1).into(),
+                _src: self.source.into(),
+                _span: (max(0, self.current_offset - 1), 0).into(),
             }),
         }
     }
@@ -215,8 +215,8 @@ impl<'src> Parser<'src> {
         match self.lexer.peek() {
             Some(Ok(tok)) => Ok(Some(*tok)),
             Some(Err(())) => Err(LanguloError::LexerError {
-                src: self.source.into(),
-                span: (self.current_offset, 1).into(),
+                _src: self.source.into(),
+                _span: (self.current_offset, 1).into(),
             }),
             None => Ok(None),
         }
@@ -224,9 +224,9 @@ impl<'src> Parser<'src> {
 
     fn peek_meaningful_token_or_eof_err(&mut self) -> LanguloResult<Tok<'src>> {
         self.peek_meaningful_token()?
-            .ok_or_else(|| LanguloError::UnexpectedEOF {
-                src: self.source.into(),
-                span: (self.current_offset, 1).into(),
+            .ok_or(LanguloError::UnexpectedEOF {
+                _src: self.source.into(),
+                _span: (max(0, self.current_offset - 1), 0).into(),
             })
     }
 
@@ -291,8 +291,8 @@ impl<'src> Parser<'src> {
                 self.skip_newlines()?;
                 if let Tok::RBrace = self.peek_meaningful_token_or_eof_err()? {
                     return Err(LanguloError::EmptyBlock {
-                        src: self.source.into(),
-                        span: (self.current_offset, 1).into(),
+                        _src: self.source.into(),
+                        _span: (self.current_offset, 1).into(),
                     });
                 }
                 loop {
@@ -305,17 +305,19 @@ impl<'src> Parser<'src> {
                 self.consume_required_tok(Tok::RBrace)?;
                 self.ast_builder.finish_node();
             }
-            Tok::Return(_) => {
+            Tok::Return(value) => {
                 self.ast_builder.start_node(AstNode::Return.into());
+                self.ast_builder.token(AstNode::Return.into(), value);
                 self.parse_expr(0)?;
                 self.ast_builder.finish_node();
             }
 
             _ => {
                 return Err(LanguloError::UnexpectedToken {
-                    token: tok.info(),
-                    src: self.source.into(),
-                    span: (self.current_offset, tok.len()).into(),
+                    _token: tok.info(),
+                    _expected: "a prefix operand".into(),
+                    _src: self.source.into(),
+                    _span: (self.current_offset, tok.len()).into(),
                 });
             }
         }
@@ -371,9 +373,10 @@ impl<'src> Parser<'src> {
             }
             _ => {
                 return Err(LanguloError::UnexpectedToken {
-                    token: tok.info(),
-                    src: self.source.into(),
-                    span: (self.current_offset, tok.len()).into(),
+                    _token: tok.info(),
+                    _expected: "an infix operand".into(),
+                    _src: self.source.into(),
+                    _span: (self.current_offset, tok.len()).into(),
                 });
             }
         }
@@ -433,11 +436,11 @@ impl<'src> Parser<'src> {
             let _ = self.next_meaningful_token()?;
             Ok(())
         } else {
-            Err(LanguloError::ExpectedTokenAbsent {
-                expected: required_tok.info(),
-                found: found_tok.info(),
-                src: self.source.into(),
-                span: (self.current_offset, found_tok.len()).into(),
+            Err(LanguloError::UnexpectedToken {
+                _token: found_tok.info(),
+                _expected: required_tok.info(),
+                _src: self.source.into(),
+                _span: self.span_highlighting_token(&found_tok),
             })
         }
     }
@@ -470,11 +473,11 @@ impl<'src> Parser<'src> {
                 Tok::At => self.add_leaf_node(AstNode::Literal, "@"),
                 Tok::Literal(value) => self.add_leaf_node(AstNode::Literal, value),
                 other => {
-                    return Err(LanguloError::UnexpectedTokenWasExpecting {
-                        token: other.info(),
-                        expected: "one of '|', '@' or a literal".into(),
-                        src: self.source.into(),
-                        span: self.span_highlighting_token(&other),
+                    return Err(LanguloError::UnexpectedToken {
+                        _token: other.info(),
+                        _expected: "one of '|', '@' or a literal".into(),
+                        _src: self.source.into(),
+                        _span: self.span_highlighting_token(&other),
                     });
                 }
             }
@@ -482,11 +485,11 @@ impl<'src> Parser<'src> {
                 Tok::Comma => _ = self.next_meaningful_token()?,
                 Tok::Pipe => break,
                 other => {
-                    return Err(LanguloError::UnexpectedTokenWasExpecting {
-                        token: other.info(),
-                        expected: "one of '|', '@' or a literal".into(),
-                        src: self.source.into(),
-                        span: self.span_highlighting_token(&other),
+                    return Err(LanguloError::UnexpectedToken {
+                        _token: other.info(),
+                        _expected: "one of '|', '@' or a literal".into(),
+                        _src: self.source.into(),
+                        _span: self.span_highlighting_token(&other),
                     });
                 }
             }
@@ -512,11 +515,11 @@ impl<'src> Parser<'src> {
                 Tok::Comma => self.next_meaningful_token()?,
                 Tok::RParen => break,
                 other => {
-                    return Err(LanguloError::UnexpectedTokenWasExpecting {
-                        token: other.info(),
-                        expected: "one of ',' or ')'".into(),
-                        src: self.source.into(),
-                        span: (self.current_offset, 1).into(),
+                    return Err(LanguloError::UnexpectedToken {
+                        _token: other.info(),
+                        _expected: "one of ',' or ')'".into(),
+                        _src: self.source.into(),
+                        _span: (self.current_offset, 1).into(),
                     });
                 }
             };
@@ -543,6 +546,7 @@ impl<'src> Parser<'src> {
         let content_end = self.current_offset - quote.len();
 
         self.ast_builder.start_node(AstNode::StringLit.into());
+        self.ast_builder.token(AstNode::StringLit.into(), value);
 
         let content = &self.source[content_start..content_end];
         let bytes = content.as_bytes();
@@ -569,8 +573,8 @@ impl<'src> Parser<'src> {
                 }
                 (b'{', true) => {
                     return Err(LanguloError::LBraceInsideStringInterpolation {
-                        src: self.source.into(),
-                        span: (content_start + slice_start, content_end - slice_start).into(),
+                        _src: self.source.into(),
+                        _span: (content_start + slice_start, content_end - slice_start).into(),
                     });
                 }
                 _ => 1,
@@ -579,8 +583,8 @@ impl<'src> Parser<'src> {
         }
         if is_slice_interpolation {
             return Err(LanguloError::UnterminatedInterpolation {
-                src: self.source.into(),
-                span: (content_start + slice_start, content_end - slice_start).into(),
+                _src: self.source.into(),
+                _span: (content_start + slice_start, content_end - slice_start).into(),
             });
         }
 
@@ -596,6 +600,7 @@ impl<'src> Parser<'src> {
 
         // Create a new lexer for the expression slice
         let expr_source = &self.source[start..end];
+        self.ast_builder.token(AstNode::InterpolationPart.into(), expr_source);
         let inner_lexer = Lexer::new(expr_source).peekable();
 
         // Swap lexers and offset, parse interpolated expr, and restore them

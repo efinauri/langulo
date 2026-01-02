@@ -1,66 +1,60 @@
 use miette::{Diagnostic, SourceSpan};
 use thiserror::Error;
 
-/// Rich error type with source locations for beautiful error reporting
+// values all start with underscore because of
+// https://github.com/zkat/miette/issues/458
+
 #[derive(Error, Debug, Diagnostic)]
 pub enum LanguloError {
-    #[error("Internal compiler error: {message}")]
+    #[error("Internal error: {_message}")]
     #[diagnostic(
         code(langulo::internal),
         help("This is a bug in Langulo. Please report it!")
     )]
-    InternalError { message: String },
+    InternalError {
+        _message: String,
+        // #[source_code]
+        // _src: String,
+        // #[label("here")]
+        // _span: SourceSpan,
+    },
 
     #[error("Unexpected end of input")]
-    #[diagnostic(
-        code(langulo::syntax::unexpected_eof),
-        help("The expression appears to be incomplete. Did you forget an operand?")
-    )]
+    #[diagnostic(code(langulo::syntax::unexpected_eof))]
     UnexpectedEOF {
         #[source_code]
-        src: String,
-        #[label("input ends here")]
-        span: SourceSpan,
+        _src: String,
+        #[label("unterminated expression")]
+        _span: SourceSpan,
     },
 
-    #[error("Unexpected token: '{token}'")]
+    #[error("Unexpected token: '{_token}'.")]
     #[diagnostic(
         code(langulo::syntax::unexpected_token),
-        help("Expected a number or operator here")
+        help("Was expecting: '{_expected}'")
     )]
     UnexpectedToken {
-        token: String,
+        _token: String,
+        _expected: String,
         #[source_code]
-        src: String,
+        _src: String,
         #[label("unexpected token")]
-        span: SourceSpan,
+        _span: SourceSpan,
     },
 
-    #[error("Unexpected token: '{token}'.")]
-    #[diagnostic(
-        code(langulo::syntax::unexpected_token),
-        help("Was expecting: '{expected}'")
-    )]
-    UnexpectedTokenWasExpecting {
-        token: String,
-        expected: String,
-        #[source_code]
-        src: String,
-        #[label("unexpected token")]
-        span: SourceSpan,
-    },
-
-    #[error("Invalid number format: '{value}'")]
+    #[error("Invalid number format: '{_value}'")]
     #[diagnostic(
         code(langulo::syntax::invalid_number),
-        help("Numbers should be in the format: 123, 1_000, or 3.14")
+        help(
+            "You cannot omit digits before or after a floating point. `.3` or `-1.` are invalid numbers."
+        )
     )]
     InvalidNumber {
-        value: String,
+        _value: String,
         #[source_code]
-        src: String,
+        _src: String,
         #[label("invalid number")]
-        span: SourceSpan,
+        _span: SourceSpan,
     },
 
     #[error("Lexer error")]
@@ -70,72 +64,71 @@ pub enum LanguloError {
     )]
     LexerError {
         #[source_code]
-        src: String,
+        _src: String,
         #[label("unrecognized character")]
-        span: SourceSpan,
+        _span: SourceSpan,
     },
 
-    #[error("Python execution error: {message}")]
+    #[error("Python execution error: {_message}")]
     #[diagnostic(
         code(langulo::runtime::python),
         help("The generated Python code failed to execute")
     )]
-    PythonError { message: String },
+    PythonError { _message: String },
 
-    #[error("Transpilation error: {message}")]
-    #[diagnostic(code(langulo::transpile::error))]
-    TranspileError { message: String },
-
-    #[error("Expected '{expected}' but found '{found}'")]
-    #[diagnostic(
-        code(langulo::syntax::unexpected_token),
-        help("Expected a number or operator here")
-    )]
-    ExpectedTokenAbsent {
-        expected: String,
-        found: String,
+    #[error("Invalid assignment target")]
+    #[diagnostic(code(langulo::transpile::invalid_lvalue))]
+    InvalidAssignmentTarget {
         #[source_code]
-        src: String,
-        #[label("unexpected token")]
-        span: SourceSpan,
+        _src: String,
+        #[label("cannot be assigned to")]
+        _span: SourceSpan,
     },
-    #[error("Empty blocks are not allowed")]
-    #[diagnostic(code(langulo::syntax::empty_block))]
+
+    #[error("Empty grouping expression")]
+    #[diagnostic(
+        code(langulo::transpile::empty_grouping),
+        help("grouping statements need at least one expression to evaluate to")
+    )]
     EmptyBlock {
         #[source_code]
-        src: String,
-        #[label("empty blocks are not allowed")]
-        span: SourceSpan,
+        _src: String,
+        #[label("here")]
+        _span: SourceSpan,
     },
-    #[error("Unclosed string literal.")]
-    #[diagnostic(code(langulo::syntax::empty_block))]
-    UnclosedString {
-        #[source_code]
-        src: String,
-        #[label("empty blocks are not allowed")]
-        span: SourceSpan,
-    },
-    #[error("Unterminated interpolation.")]
+
+    #[error("Unterminated interpolation")]
     #[diagnostic(
         code(langulo::syntax::interpolation),
-        help("If you want to use a left brace as a character, escape it: \\{{")
+        help("If you meant to use `{{` as a character, escape it: `\\{{`")
     )]
     UnterminatedInterpolation {
         #[source_code]
-        src: String,
-        #[label("unterminated interpolation")]
-        span: SourceSpan,
+        _src: String,
+        #[label("here")]
+        _span: SourceSpan,
     },
-    #[error("Inside a string interpolation, statements using braces are not allowed")]
+    #[error("Inside a string interpolation, expressions using braces are not allowed")]
     #[diagnostic(
         code(langulo::syntax::interpolation),
-        help("assign this statement to a variable and interpolate that instead")
+        help("Consider assigning this expression to a variable and interpolate that instead")
     )]
     LBraceInsideStringInterpolation {
         #[source_code]
-        src: String,
+        _src: String,
         #[label("statement using braces")]
-        span: SourceSpan,
+        _span: SourceSpan,
+    },
+    
+    #[error("Return expressions are only allowed inside grouping statements")]
+    #[diagnostic(
+        code(langulo::transpile::return_outside_block),
+    )]
+    ReturnOutsideBlock {
+        #[source_code]
+        _src: String,
+        #[label("here")]
+        _span: SourceSpan,
     },
 }
 

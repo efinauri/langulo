@@ -1,9 +1,11 @@
 use crate::errors::{LanguloError, LanguloResult};
-use crate::parser::{has_print_marker, AstNode, LanguloSyntaxNode};
+use crate::parser::{AstNode, LanguloSyntaxNode, has_print_marker};
 use std::collections::HashSet;
 use std::string::ToString;
 
-const TMP_VAR_NAME: &'static str = "tmp";
+const HIDDEN_VARIABLE_PREFIX: &'static str = "h";
+const USER_LITERAL_PREFIX: &'static str = "uu"; // double to avoid hitting potential reserved keywords
+const USER_AT_VAR: &'static str = "ua";
 
 pub fn transpile(ast: &LanguloSyntaxNode) -> LanguloResult<String> {
     let mut transpiler = Transpiler::new();
@@ -11,6 +13,7 @@ pub fn transpile(ast: &LanguloSyntaxNode) -> LanguloResult<String> {
     Ok(transpiler.finish())
 }
 
+/// a static piece of python code that implements language constructs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum HelperFunction {
     Print,
@@ -21,14 +24,25 @@ impl HelperFunction {
     fn definition(&self) -> &'static str {
         match self {
             HelperFunction::Print => "def _print(x):\n    print(x)\n    return x",
-            HelperFunction::Return => "class _Return(Exception):\n    def __init__(self, v): self.value = v",
+            HelperFunction::Return => {
+                "class _Return(Exception):\n    def __init__(self, v): self.value = v"
+            }
         }
     }
 }
 
+/// when transpiling simple language constructs, you usually emit a one-liner that just goes to grow `current_line`.
+///
+/// more complex constructs, on the other hand, may require you to have executed other python logic beforehand.
+/// in this scenario, the workflow is:
+/// - push the index of `current_line` that you need to go back to once done into `checkpoints`;
+/// - put the necessary python logic in `lines` and assign that overall result to a variable;
+/// - resolve the checkpoint by growing `current_line` with that variable
+///
+/// this is implemented in: [PythonEmitter::resolve_checkpoint_to_var]
 struct Scope {
-    lines: Vec<String>,
     current_line: String,
+    lines: Vec<String>,
     checkpoints: Vec<usize>,
 }
 
@@ -48,8 +62,6 @@ struct PythonEmitter {
     helpers: HashSet<HelperFunction>,
     /// a counter to make sure that generated variables/function names are unique
     tmp_counter: usize,
-    /// an index of current_line marked for future modification
-    checkpoints: Vec<usize>,
 }
 
 impl PythonEmitter {
@@ -59,12 +71,7 @@ impl PythonEmitter {
             indent: 0,
             helpers: HashSet::new(),
             tmp_counter: 0,
-            checkpoints: Vec::new(),
         }
-    }
-
-    fn current_scope(&self) -> &Scope {
-        self.scopes.last().expect("No active scope")
     }
 
     fn current_scope_mut(&mut self) -> &mut Scope {
@@ -80,7 +87,7 @@ impl PythonEmitter {
         self.scopes.pop().expect("Cannot pop last scope")
     }
 
-    fn write(&mut self, code: &str) {
+    fn grow_current_line_with(&mut self, code: &str) {
         self.current_scope_mut().current_line.push_str(code);
     }
 
@@ -88,22 +95,21 @@ impl PythonEmitter {
         "    ".repeat(self.indent)
     }
 
-    fn newline(&mut self) {
+    fn finish_current_line(&mut self) {
         let indent = self.indentation();
         let scope = self.current_scope_mut();
-        assert!(!scope.current_line.is_empty());
-        assert!(scope.checkpoints.is_empty());
+        assert!(
+            !scope.current_line.is_empty(),
+            "tried to finalize an empty line"
+        );
+        assert!(
+            scope.checkpoints.is_empty(),
+            "cannot finalize line: there are unresolved checkpoints relative to it"
+        );
         scope
             .lines
             .push(format!("{}{}", indent, scope.current_line));
         scope.current_line.clear();
-    }
-
-    fn emit_line(&mut self, line: &str) {
-        let indent = self.indentation();
-        self.current_scope_mut()
-            .lines
-            .push(format!("{}{}", indent, line));
     }
 
     fn increase_indentation(&mut self) {
@@ -119,8 +125,8 @@ impl PythonEmitter {
         self.helpers.insert(helper);
     }
 
-    fn fresh_tmp(&mut self) -> String {
-        let name = format!("{}{}", TMP_VAR_NAME, self.tmp_counter);
+    fn fresh_hidden_var(&mut self) -> String {
+        let name = format!("{}{}", HIDDEN_VARIABLE_PREFIX, self.tmp_counter);
         self.tmp_counter += 1;
         name
     }
@@ -130,36 +136,48 @@ impl PythonEmitter {
         scope.checkpoints.push(scope.current_line.len());
     }
 
-    /// grabs the current_line slice since the last set checkpoint, assign it to variable and adds the assignment to the emitted code.
-    /// returns the variable name that was used.
-    fn hoist_checkpoint(&mut self, var: String) -> String {
+    fn add_full_line_before_current(&mut self, line: &str) {
         let indent = self.indentation();
+        self.current_scope_mut()
+            .lines
+            .push(format!("{}{}", indent, line));
+    }
+    /// resolves the topmost checkpoint of the topmost scope by:
+    /// - cutting up the [current_line](Scope) slice from the checkpoint onwards;
+    /// - making it a variable assignment;
+    /// - putting it into the translated python code before `current_line`
+    fn resolve_checkpoint_to_var(&mut self, var: &String) {
         let scope = self.current_scope_mut();
         assert!(!scope.checkpoints.is_empty());
         let start = scope.checkpoints.pop().unwrap();
         assert!(scope.current_line.len() >= start);
         let expr = scope.current_line[start..].to_string();
         scope.current_line.truncate(start);
-        scope.lines.push(format!("{}{} = {}", indent, var, expr));
-        var
+        self.add_full_line_before_current(&format!("{} = {}", var, expr));
     }
 
-    fn hoist_checkpoint_to_tmp(&mut self) -> String {
-        let tmp = self.fresh_tmp();
-        self.hoist_checkpoint(tmp)
+    /// calls [PythonEmitter::resolve_checkpoint_to_var] with an internal variable.
+    ///
+    /// returns the variable name that was used.
+    fn resolve_checkpoint_to_hidden_var(&mut self) -> String {
+        let hid = self.fresh_hidden_var();
+        self.resolve_checkpoint_to_var(&hid);
+        hid
     }
 
-    fn print(&mut self, tmp_var: &String) {
-        let indent = self.indentation();
-        self.current_scope_mut()
-            .lines
-            .push(format!("{}_print({})", indent, tmp_var));
+    fn print(&mut self, var: &String) {
+        self.add_full_line_before_current(format!("_print({})", var).as_str());
     }
 
+    /// emits the complete python code
     fn finish(mut self) -> String {
         assert_eq!(self.scopes.len(), 1, "Unbalanced scopes");
+
         let indent = self.indentation();
+
         let scope = self.current_scope_mut();
+        assert!(scope.checkpoints.is_empty(), "Unresolved checkpoints");
+
         if !scope.current_line.is_empty() {
             scope
                 .lines
@@ -169,11 +187,9 @@ impl PythonEmitter {
 
         let mut output = String::new();
 
-        if !self.helpers.is_empty() {
-            for helper in &self.helpers {
-                output.push_str(helper.definition());
-                output.push_str("\n\n");
-            }
+        for helper in &self.helpers {
+            output.push_str(helper.definition());
+            output.push_str("\n\n");
         }
 
         output.push_str(&self.scopes.pop().unwrap().lines.join("\n"));
@@ -197,12 +213,9 @@ impl Transpiler {
     }
 
     fn literal_to_var(node: &LanguloSyntaxNode) -> String {
-        let text = node.text().to_string();
-        // prepend var to make sure we avoid reserved keywords
-        if text == "@" {
-            "varself".to_string()
-        } else {
-            format!("var{}", text)
+        match node.text().to_string().as_str() {
+            "@" => USER_AT_VAR.into(),
+            other => format!("{}{}", USER_LITERAL_PREFIX, other),
         }
     }
 
@@ -215,9 +228,9 @@ impl Transpiler {
         self.visit_inner(node)?;
 
         if should_print {
-            let tmp = self.emitter.hoist_checkpoint_to_tmp();
+            let tmp = self.emitter.resolve_checkpoint_to_hidden_var();
             self.emitter.print(&tmp);
-            self.emitter.write(tmp.as_str());
+            self.emitter.grow_current_line_with(tmp.as_str());
         }
         Ok(())
     }
@@ -234,17 +247,18 @@ impl Transpiler {
 
         if should_print {
             self.emitter.require_helper(HelperFunction::Print);
-            let tmp = self.emitter.fresh_tmp();
+            let tmp = self.emitter.fresh_hidden_var();
             self.emitter
-                .emit_line(&format!("if not '{}' in vars():", target));
+                .add_full_line_before_current(&format!("if not '{}' in vars():", target));
             self.emitter.increase_indentation();
-            self.emitter.emit_line(&format!(
+            self.emitter.add_full_line_before_current(&format!(
                 "{}='(undefined variable `{}`)'",
                 target,
                 node.text().to_string()
             ));
             self.emitter.decrease_indentation();
-            self.emitter.emit_line(&format!("{} = {}", tmp, target));
+            self.emitter
+                .add_full_line_before_current(&format!("{} = {}", tmp, target));
             self.emitter.print(&tmp);
         }
 
@@ -258,7 +272,9 @@ impl Transpiler {
                     self.visit(&child)?;
                 }
             }
-            AstNode::Literal => self.emitter.write(&Transpiler::literal_to_var(node)),
+            AstNode::Literal => self
+                .emitter
+                .grow_current_line_with(&Transpiler::literal_to_var(node)),
             AstNode::Num => {
                 let text = node.text().to_string();
                 let clean = text.replace('_', "");
@@ -267,7 +283,7 @@ impl Transpiler {
                         message: format!("Invalid number literal: {}", text),
                     });
                 }
-                self.emitter.write(&text);
+                self.emitter.grow_current_line_with(&text);
             }
             AstNode::Bool => {
                 let text = node.text().to_string();
@@ -278,7 +294,7 @@ impl Transpiler {
                     .to_uppercase()
                     .collect::<String>()
                     + &text[1..];
-                self.emitter.write(&capitalized);
+                self.emitter.grow_current_line_with(&capitalized);
             }
             AstNode::Not => self.visit_unary(node, "not ")?,
             AstNode::Add => self.visit_binary(node, " + ")?,
@@ -300,9 +316,9 @@ impl Transpiler {
                 let child = node.first_child().ok_or(LanguloError::TranspileError {
                     message: "Internal error: Grouping node has no children".to_string(),
                 })?;
-                self.emitter.write("(");
+                self.emitter.grow_current_line_with("(");
                 self.visit(&child)?;
-                self.emitter.write(")");
+                self.emitter.grow_current_line_with(")");
             }
             AstNode::Print => {
                 return Err(LanguloError::InternalError {
@@ -320,8 +336,8 @@ impl Transpiler {
 
                 self.emitter.mark_checkpoint();
                 self.visit(val_node)?;
-                self.emitter.hoist_checkpoint(lvalue.clone());
-                self.emitter.write(&lvalue);
+                self.emitter.resolve_checkpoint_to_var(&lvalue);
+                self.emitter.grow_current_line_with(&lvalue);
             }
             AstNode::FunctionDecl => {
                 self.visit_function(node)?;
@@ -338,17 +354,17 @@ impl Transpiler {
                 let args = &children[1];
 
                 self.visit(func)?;
-                self.emitter.write("(");
+                self.emitter.grow_current_line_with("(");
 
                 let arg_exprs: Vec<_> = args.children().collect();
                 for (i, arg) in arg_exprs.iter().enumerate() {
                     if i > 0 {
-                        self.emitter.write(", ");
+                        self.emitter.grow_current_line_with(", ");
                     }
                     self.visit(arg)?;
                 }
 
-                self.emitter.write(")");
+                self.emitter.grow_current_line_with(")");
             }
             AstNode::PostfixFnCall => {
                 let children: Vec<_> = node.children().collect();
@@ -361,7 +377,7 @@ impl Transpiler {
                 let args = &call_children[1];
 
                 self.visit(func)?;
-                self.emitter.write("(");
+                self.emitter.grow_current_line_with("(");
 
                 // First arg is the @ value
                 self.visit(at_value)?;
@@ -369,26 +385,29 @@ impl Transpiler {
                 // Then the rest of the args
                 let arg_exprs: Vec<_> = args.children().collect();
                 for arg in arg_exprs.iter() {
-                    self.emitter.write(", ");
+                    self.emitter.grow_current_line_with(", ");
                     self.visit(arg)?;
                 }
 
-                self.emitter.write(")");
+                self.emitter.grow_current_line_with(")");
             }
 
             AstNode::CallArgs => {
                 return Err(LanguloError::InternalError {
                     message: "CallArgs should not be visited directly".to_string(),
                 });
-            },
+            }
 
             AstNode::Block => {
                 let children: Vec<_> = node.children().collect();
-                assert!(!children.is_empty(), "Empty block should have been caught by parser");
+                assert!(
+                    !children.is_empty(),
+                    "Empty block should have been caught by parser"
+                );
                 self.emitter.require_helper(HelperFunction::Return);
 
-                let result_var = self.emitter.fresh_tmp();
-                self.emitter.emit_line("try:");
+                let result_var = self.emitter.fresh_hidden_var();
+                self.emitter.add_full_line_before_current("try:");
                 self.emitter.increase_indentation();
 
                 for (i, child) in children.iter().enumerate() {
@@ -397,22 +416,25 @@ impl Transpiler {
                     if is_last {
                         self.emitter.mark_checkpoint();
                         self.visit(child)?;
-                        let val = self.emitter.hoist_checkpoint_to_tmp();
-                        self.emitter.emit_line(&format!("{} = {}", result_var, val));
+                        let val = self.emitter.resolve_checkpoint_to_hidden_var();
+                        self.emitter
+                            .add_full_line_before_current(&format!("{} = {}", result_var, val));
                     } else {
                         self.emitter.mark_checkpoint();
                         self.visit(child)?;
-                        self.emitter.hoist_checkpoint_to_tmp();
+                        self.emitter.resolve_checkpoint_to_hidden_var();
                     }
                 }
 
                 self.emitter.decrease_indentation();
-                self.emitter.emit_line("except _Return as _r:");
+                self.emitter
+                    .add_full_line_before_current("except _Return as _r:");
                 self.emitter.increase_indentation();
-                self.emitter.emit_line(&format!("{} = _r.value", result_var));
+                self.emitter
+                    .add_full_line_before_current(&format!("{} = _r.value", result_var));
                 self.emitter.decrease_indentation();
 
-                self.emitter.write(&result_var);
+                self.emitter.grow_current_line_with(&result_var);
             }
 
             AstNode::Return => {
@@ -422,45 +444,48 @@ impl Transpiler {
                 })?;
                 self.emitter.mark_checkpoint();
                 self.visit(&child)?;
-                let val = self.emitter.hoist_checkpoint_to_tmp();
-                self.emitter.emit_line(&format!("raise _Return({})", val));
-                self.emitter.write("None");
-            },
+                let val = self.emitter.resolve_checkpoint_to_hidden_var();
+                self.emitter
+                    .add_full_line_before_current(&format!("raise _Return({})", val));
+                self.emitter.grow_current_line_with("None");
+            }
             AstNode::StringLit => {
                 let children: Vec<_> = node.children().collect();
 
                 if children.is_empty() {
-                    self.emitter.write("\"\"");
+                    self.emitter.grow_current_line_with("\"\"");
                 } else if children.len() == 1 && children[0].kind() == AstNode::StringPart {
                     let text = children[0].text().to_string();
-                    self.emitter.write(&text);
+                    self.emitter.grow_current_line_with(&text);
                 } else {
-                    self.emitter.write("f\"");
+                    self.emitter.grow_current_line_with("f\"");
                     for child in children {
                         match child.kind() {
                             AstNode::StringPart => {
                                 let text = child.text().to_string();
-                                let content = &text[1..text.len()-1];
-                                self.emitter.write(content);
+                                let content = &text[1..text.len() - 1];
+                                self.emitter.grow_current_line_with(content);
                             }
                             AstNode::InterpolationPart => {
-                                self.emitter.write("{");
-                                let expr = child.first_child().ok_or(LanguloError::TranspileError {
-                                    message: "InterpolationPart has no expression".to_string(),
-                                })?;
+                                self.emitter.grow_current_line_with("{");
+                                let expr =
+                                    child.first_child().ok_or(LanguloError::TranspileError {
+                                        message: "InterpolationPart has no expression".to_string(),
+                                    })?;
                                 self.visit(&expr)?;
-                                self.emitter.write("}");
+                                self.emitter.grow_current_line_with("}");
                             }
                             _ => {}
                         }
                     }
-                    self.emitter.write("\"");
+                    self.emitter.grow_current_line_with("\"");
                 }
             }
 
             AstNode::StringPart | AstNode::InterpolationPart => {
                 return Err(LanguloError::InternalError {
-                    message: "StringPart/InterpolationPart should be handled by StringLit".to_string(),
+                    message: "StringPart/InterpolationPart should be handled by StringLit"
+                        .to_string(),
                 });
             }
         }
@@ -486,9 +511,12 @@ impl Transpiler {
             .map(|child| Self::literal_to_var(&child))
             .collect();
 
-        let fn_name = self.emitter.fresh_tmp();
-        self.emitter
-            .emit_line(&format!("def {}({}):", fn_name, params.join(", ")));
+        let fn_name = self.emitter.fresh_hidden_var();
+        self.emitter.add_full_line_before_current(&format!(
+            "def {}({}):",
+            fn_name,
+            params.join(", ")
+        ));
         self.emitter.push_scope();
         self.emitter.increase_indentation();
 
@@ -497,15 +525,15 @@ impl Transpiler {
             .ok_or(LanguloError::TranspileError {
                 message: "Function body is empty".to_string(),
             })?;
-        self.emitter.write("return ");
+        self.emitter.grow_current_line_with("return ");
         self.visit(&body_expr)?;
-        self.emitter.newline();
+        self.emitter.finish_current_line();
 
         self.emitter.decrease_indentation();
 
         self.end_scope();
 
-        self.emitter.write(&fn_name);
+        self.emitter.grow_current_line_with(&fn_name);
         Ok(())
     }
 
@@ -528,11 +556,11 @@ impl Transpiler {
             });
         }
 
-        self.emitter.write("(");
+        self.emitter.grow_current_line_with("(");
         self.visit(&children[0])?;
-        self.emitter.write(op);
+        self.emitter.grow_current_line_with(op);
         self.visit(&children[1])?;
-        self.emitter.write(")");
+        self.emitter.grow_current_line_with(")");
         Ok(())
     }
 
@@ -547,10 +575,10 @@ impl Transpiler {
             });
         }
         let child = node.first_child().unwrap();
-        self.emitter.write(op);
-        self.emitter.write("(");
+        self.emitter.grow_current_line_with(op);
+        self.emitter.grow_current_line_with("(");
         self.visit(&child)?;
-        self.emitter.write(")");
+        self.emitter.grow_current_line_with(")");
         Ok(())
     }
 }
@@ -575,15 +603,15 @@ mod tests {
     #[test]
     fn test_print_simple() {
         let result = transpile_source("$3");
-        assert!(result.contains("tmp0 = 3"));
-        assert!(result.contains("_print(tmp0)"));
+        assert!(result.contains("h0 = 3"));
+        assert!(result.contains("_print(h0)"));
     }
 
     #[test]
     fn test_print_in_expression() {
         let result = transpile_source("1 + $2 + 3");
-        assert!(result.contains("tmp0 = 2"));
-        assert!(result.contains("_print(tmp0)"));
+        assert!(result.contains("h0 = 2"));
+        assert!(result.contains("_print(h0)"));
     }
 
     #[test]
@@ -595,21 +623,21 @@ mod tests {
     #[test]
     fn test_assignment() {
         let result = transpile_source("x = 42");
-        assert!(result.contains("varx = 42"));
+        assert!(result.contains("uux = 42"));
     }
 
     #[test]
     fn test_assignment_in_expression() {
         let result = transpile_source("3 + (x = 2)");
-        assert!(result.contains("varx = 2"));
-        assert!(result.contains("(3 + (varx))"));
+        assert!(result.contains("uux = 2"));
+        assert!(result.contains("(3 + (uux))"));
     }
 
     #[test]
     fn test_print_assignment() {
         // x $= 3 means: assign 3 to x, then print the result
         let result = transpile_source("x $= 3");
-        assert!(result.contains("varx = 3"));
+        assert!(result.contains("uux = 3"));
         assert!(result.contains("_print"));
     }
 
@@ -617,7 +645,7 @@ mod tests {
     fn test_print_assignment_in_expression() {
         // 1 + (x $= 2) means: assign 2 to x, print 2, then add to 1
         let result = transpile_source("1 + (x $= 2)");
-        assert!(result.contains("varx = 2"));
+        assert!(result.contains("uux = 2"));
         assert!(result.contains("_print"));
     }
     ///////////////
@@ -627,50 +655,50 @@ mod tests {
     #[test]
     fn test_function_no_params() {
         let result = transpile_source("always_two = || 2");
-        assert!(result.contains("def tmp0():"));
+        assert!(result.contains("def h0():"));
         assert!(result.contains("return 2"));
-        assert!(result.contains("varalways_two = tmp0"));
+        assert!(result.contains("uualways_two = h0"));
     }
 
     #[test]
     fn test_function_one_param() {
         let result = transpile_source("double = |x| x * 2");
-        assert!(result.contains("def tmp0(varx):"));
-        assert!(result.contains("return (varx * 2)"));
-        assert!(result.contains("vardouble = tmp0"));
+        assert!(result.contains("def h0(uux):"));
+        assert!(result.contains("return (uux * 2)"));
+        assert!(result.contains("uudouble = h0"));
     }
 
     #[test]
     fn test_function_two_params() {
         let result = transpile_source("add = |a, b| a + b");
-        assert!(result.contains("def tmp0(vara, varb):"));
-        assert!(result.contains("return (vara + varb)"));
-        assert!(result.contains("varadd = tmp0"));
+        assert!(result.contains("def h0(uua, uub):"));
+        assert!(result.contains("return (uua + uub)"));
+        assert!(result.contains("uuadd = h0"));
     }
 
     #[test]
-    fn test_function_withvarself() {
+    fn test_function_with_atparam() {
         let result = transpile_source("plus = |@, other| @ + other");
-        assert!(result.contains("def tmp0(varself, varother):"));
-        assert!(result.contains("return (varself + varother)"));
-        assert!(result.contains("varplus = tmp0"));
+        assert!(result.contains("def h0(ua, uuother):"));
+        assert!(result.contains("return (ua + uuother)"));
+        assert!(result.contains("uuplus = h0"));
     }
 
     #[test]
     fn test_function_complex_body() {
         let result = transpile_source("calc = |x, y| (x + y) * 2");
-        assert!(result.contains("def tmp0(varx, vary):"));
-        assert!(result.contains("return (((varx + vary)) * 2)"));
-        assert!(result.contains("varcalc = tmp0"));
+        assert!(result.contains("def h0(uux, uuy):"));
+        assert!(result.contains("return (((uux + uuy)) * 2)"));
+        assert!(result.contains("uucalc = h0"));
     }
 
     #[test]
     fn test_function_in_expression() {
         // Function as part of a larger expression
         let result = transpile_source("1 + (f = |x| x)");
-        assert!(result.contains("def tmp0(varx):"));
-        assert!(result.contains("return varx"));
-        assert!(result.contains("varf = tmp0"));
+        assert!(result.contains("def h0(uux):"));
+        assert!(result.contains("return uux"));
+        assert!(result.contains("uuf = h0"));
     }
     //////////////
     // fn calls //
@@ -679,27 +707,27 @@ mod tests {
     #[test]
     fn test_function_call_transpile() {
         let result = transpile_source("add(1, 2)");
-        assert!(result.contains("varadd(1, 2)"));
+        assert!(result.contains("uuadd(1, 2)"));
     }
 
     #[test]
     fn test_postfix_call_transpile() {
         let result = transpile_source("3 @ plus(2)");
-        assert!(result.contains("varplus(3, 2)"));
+        assert!(result.contains("uuplus(3, 2)"));
     }
 
     #[test]
     fn test_postfix_call_no_extra_args() {
         let result = transpile_source("5 @ double()");
-        assert!(result.contains("vardouble(5)"));
+        assert!(result.contains("uudouble(5)"));
     }
 
     #[test]
     fn test_define_and_call() {
         let result = transpile_source("add = |a, b| a + b");
-        assert!(result.contains("def tmp0(vara, varb):"));
-        assert!(result.contains("return (vara + varb)"));
-        assert!(result.contains("varadd = tmp0"));
+        assert!(result.contains("def h0(uua, uub):"));
+        assert!(result.contains("return (uua + uub)"));
+        assert!(result.contains("uuadd = h0"));
     }
 
     #[test]
@@ -713,8 +741,8 @@ mod tests {
     #[test]
     fn test_block_multiple() {
         let result = transpile_source("{ x = 1\nx + 1 }");
-        assert!(result.contains("varx = 1"));
-        assert!(result.contains("(varx + 1)"));
+        assert!(result.contains("uux = 1"));
+        assert!(result.contains("(uux + 1)"));
     }
 
     #[test]

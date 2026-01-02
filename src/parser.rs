@@ -1,4 +1,3 @@
-use std::cmp::{max, min};
 use crate::errors::LanguloError;
 use crate::errors::LanguloResult;
 use crate::lexer::Tok;
@@ -6,6 +5,7 @@ use crate::parser::AstNode::Root;
 use logos::{Lexer, Source};
 use miette::SourceSpan;
 use rowan::{Checkpoint, GreenNodeBuilder, NodeOrToken, SyntaxNode};
+use std::cmp::min;
 use std::iter::Peekable;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -553,23 +553,27 @@ impl<'src> Parser<'src> {
         while i < bytes.len() {
             let increment = match (bytes[i], is_slice_interpolation) {
                 (b'\\', _) => 2, // skip both \ and the char it's escaping
-                (b'{', false) => { // entering interpolation - flush current string part if any
+                (b'{', false) => {
+                    // entering interpolation - flush current string part if any
                     self.add_string_part(&content[slice_start..i], quote);
                     is_slice_interpolation = true;
                     slice_start = i + 2; // 2 and not 1 to also skip opening {
                     1
-                },
-                (b'}', true) => { // exiting interpolation - flush interpolation part
+                }
+                (b'}', true) => {
+                    // exiting interpolation - flush interpolation part
                     is_slice_interpolation = false;
                     self.add_interpolation_part(slice_start, i + 1)?;
                     slice_start = i + 1;
                     1
-                },
-                (b'{', true) => return Err(LanguloError::LBraceInsideStringInterpolation {
-                    src: self.source.into(),
-                    span: (content_start + slice_start, content_end - slice_start).into(),
-                }),
-                _ => 1
+                }
+                (b'{', true) => {
+                    return Err(LanguloError::LBraceInsideStringInterpolation {
+                        src: self.source.into(),
+                        span: (content_start + slice_start, content_end - slice_start).into(),
+                    });
+                }
+                _ => 1,
             };
             i = min(i + increment, content_end); // make sure we don't overflow
         }
@@ -620,7 +624,7 @@ impl<'src> Parser<'src> {
 #[cfg(test)]
 mod tests {
     use crate::parser::AstNode::*;
-    use crate::parser::{AstNode, has_print_marker, parse};
+    use crate::parser::{has_print_marker, parse, AstNode};
 
     #[derive(Default)]
     struct AstExpectation<'a> {
@@ -1201,7 +1205,14 @@ mod tests {
     fn test_only_iterpolation() {
         expect_ast(AstExpectation {
             source: r#""{x}""#,
-            nodes: &[Root, StringLit, StringPart, InterpolationPart, Literal, StringPart],
+            nodes: &[
+                Root,
+                StringLit,
+                StringPart,
+                InterpolationPart,
+                Literal,
+                StringPart,
+            ],
             children: &[&[1, 2, 3, 5], &[3, 4]],
             ..Default::default()
         });
@@ -1211,7 +1222,14 @@ mod tests {
     fn test_string_with_interpolation() {
         expect_ast(AstExpectation {
             source: r#""hello {name}""#,
-            nodes: &[Root, StringLit, StringPart, InterpolationPart, Literal, StringPart],
+            nodes: &[
+                Root,
+                StringLit,
+                StringPart,
+                InterpolationPart,
+                Literal,
+                StringPart,
+            ],
             children: &[&[1, 2, 3, 5], &[3, 4]],
             ..Default::default()
         });

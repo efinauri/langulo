@@ -3,7 +3,7 @@ use crate::errors::LanguloError;
 use crate::errors::LanguloResult;
 use crate::lexer::Tok;
 use crate::parser::AstNode::Root;
-use logos::Lexer;
+use logos::{Lexer, Source};
 use miette::SourceSpan;
 use rowan::{Checkpoint, GreenNodeBuilder, NodeOrToken, SyntaxNode};
 use std::iter::Peekable;
@@ -266,8 +266,8 @@ impl<'src> Parser<'src> {
             Tok::Literal(value) => self.add_leaf_node(AstNode::Literal, value),
             Tok::StringLitDouble(value) => self.parse_string_lit(value, "\"")?,
             Tok::StringLitSingle(value) => self.parse_string_lit(value, "'")?,
-            Tok::TripleDoubleQuote(value) => self.parse_multiline_string_lit(value, "\"\"\"")?,
-            Tok::TripleSingleQuote(value) => self.parse_multiline_string_lit(value, "'''")?,
+            Tok::TripleDoubleQuote(value) => self.parse_string_lit(value, "\"\"\"")?,
+            Tok::TripleSingleQuote(value) => self.parse_string_lit(value, "'''")?,
             Tok::True(value) | Tok::False(value) => self.add_leaf_node(AstNode::Bool, value),
             Tok::At => self.add_leaf_node(AstNode::Literal, "@"),
             Tok::Not(_) => self.add_unary_node_prefix(AstNode::Not, tok.precedence())?,
@@ -280,7 +280,7 @@ impl<'src> Parser<'src> {
             }
             Tok::Pipe => self.parse_function_declaration()?,
             Tok::Minus => {
-                // desugar -3 into -1*3
+                // desugar - <expr> into -1 * <expr>
                 self.ast_builder.start_node(AstNode::Multiply.into());
                 self.add_leaf_node(AstNode::Num, "-1");
                 self.parse_expr(Tok::Star.precedence())?;
@@ -536,12 +536,12 @@ impl<'src> Parser<'src> {
     ///         StringPart          // string,
     ///         InterpolationPart   // {literal}
     /// ```
-    fn parse_string_content(
-        &mut self,
-        content_start: usize,
-        content_end: usize,
-        quote: &str, // one of ", ', """ or '''
-    ) -> LanguloResult<()> {
+    fn parse_string_lit(&mut self, value: &str, quote: &str) -> LanguloResult<()> {
+        // calculate string bounds excluding quotes
+        let token_start = self.current_offset - value.len();
+        let content_start = token_start + quote.len();
+        let content_end = self.current_offset - quote.len();
+
         self.ast_builder.start_node(AstNode::StringLit.into());
 
         let content = &self.source[content_start..content_end];
@@ -561,21 +561,32 @@ impl<'src> Parser<'src> {
                 },
                 (b'}', true) => { // exiting interpolation - flush interpolation part
                     is_slice_interpolation = false;
-                    self.parse_interpolation(slice_start, i + 1)?;
+                    self.add_interpolation_part(slice_start, i + 1)?;
                     slice_start = i + 1;
                     1
                 },
+                (b'{', true) => return Err(LanguloError::LBraceInsideStringInterpolation {
+                    src: self.source.into(),
+                    span: (content_start + slice_start, content_end - slice_start).into(),
+                }),
                 _ => 1
             };
-            i = min(i + increment, content_end);
+            i = min(i + increment, content_end); // make sure we don't overflow
         }
+        if is_slice_interpolation {
+            return Err(LanguloError::UnterminatedInterpolation {
+                src: self.source.into(),
+                span: (content_start + slice_start, content_end - slice_start).into(),
+            });
+        }
+
         // add any potential leftover string part
         self.add_string_part(&content[slice_start..i], quote);
         self.ast_builder.finish_node();
         Ok(())
     }
 
-    fn parse_interpolation(&mut self, start: usize, end: usize) -> LanguloResult<()> {
+    fn add_interpolation_part(&mut self, start: usize, end: usize) -> LanguloResult<()> {
         self.ast_builder
             .start_node(AstNode::InterpolationPart.into());
 
@@ -583,15 +594,13 @@ impl<'src> Parser<'src> {
         let expr_source = &self.source[start..end];
         let inner_lexer = Lexer::new(expr_source).peekable();
 
-        // Swap lexers and offset
+        // Swap lexers and offset, parse interpolated expr, and restore them
         let outer_lexer = std::mem::replace(&mut self.lexer, inner_lexer);
         let outer_offset = self.current_offset;
         self.current_offset = start; // Keep offset relative to original source for errors
 
-        // Parse the expression
         self.parse_expr(0)?;
 
-        // Restore outer lexer
         self.lexer = outer_lexer;
         self.current_offset = outer_offset;
 
@@ -599,25 +608,9 @@ impl<'src> Parser<'src> {
         Ok(())
     }
 
-    fn parse_string_lit(&mut self, value: &str, quote: &str) -> LanguloResult<()> {
-        // Calculate where content starts/ends in original source
-        // current_offset is now AFTER the string token, so we go back
-        let token_start = self.current_offset - value.len();
-        let content_start = token_start + 1; // skip opening quote
-        let content_end = self.current_offset - 1; // skip closing quote
-        self.parse_string_content(content_start, content_end, quote)
-    }
-
-    fn parse_multiline_string_lit(&mut self, value: &str, quote: &str) -> LanguloResult<()> {
-        let token_start = self.current_offset - value.len();
-        let content_start = token_start + 3; // skip opening """
-        let content_end = self.current_offset - 3; // skip closing """
-        self.parse_string_content(content_start, content_end, quote)
-    }
-
     fn add_string_part(&mut self, content: &str, quote: &str) {
         self.ast_builder.start_node(AstNode::StringPart.into());
-        // Store with quote info so transpiler knows how to emit
+        // Store with quote info so transpiler knows how to emit it
         let quoted = format!("{}{}{}", quote, content, quote);
         self.ast_builder.token(AstNode::StringPart.into(), &quoted);
         self.ast_builder.finish_node();

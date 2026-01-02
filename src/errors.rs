@@ -107,12 +107,34 @@ pub enum LanguloError {
         #[label("empty blocks are not allowed")]
         span: SourceSpan,
     },
-    #[error("Unclosed string literal: '{src}' starting at {span:?}")]
+    #[error("Unclosed string literal.")]
     #[diagnostic(code(langulo::syntax::empty_block))]
     UnclosedString {
         #[source_code]
         src: String,
         #[label("empty blocks are not allowed")]
+        span: SourceSpan,
+    },
+    #[error("Unterminated interpolation.")]
+    #[diagnostic(
+        code(langulo::syntax::interpolation),
+        help("If you want to use a left brace as a character, escape it: \\{{")
+    )]
+    UnterminatedInterpolation {
+        #[source_code]
+        src: String,
+        #[label("unterminated interpolation")]
+        span: SourceSpan,
+    },
+    #[error("Inside a string interpolation, statements using braces are not allowed")]
+    #[diagnostic(
+        code(langulo::syntax::interpolation),
+        help("assign this statement to a variable and interpolate that instead")
+    )]
+    LBraceInsideStringInterpolation {
+        #[source_code]
+        src: String,
+        #[label("statement using braces")]
         span: SourceSpan,
     },
 }

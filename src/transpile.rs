@@ -1,8 +1,8 @@
 use crate::errors::{LanguloError, LanguloResult};
 use crate::parser::{has_print_marker, AstNode, LanguloSyntaxNode};
+use miette::SourceSpan;
 use std::collections::HashSet;
 use std::string::ToString;
-use miette::SourceSpan;
 
 const HIDDEN_VARIABLE_PREFIX: &'static str = "h";
 const USER_LITERAL_PREFIX: &'static str = "uu"; // double to avoid hitting potential reserved keywords
@@ -19,16 +19,45 @@ pub fn transpile(ast: &LanguloSyntaxNode, source: &str) -> LanguloResult<Vec<Str
 enum HelperFunction {
     Print,
     Return,
+    Option,
 }
 
 impl HelperFunction {
     fn definition(&self) -> String {
         match self {
-            HelperFunction::Print => "def _print(x):\n    print(x)\n    return x",
-            HelperFunction::Return => {
-                "class _Return(Exception):\n    def __init__(self, v): self.value = v"
+            HelperFunction::Print => {
+                r#"
+try:
+    _print
+except NameError:
+    def _print(x):
+        print(x)
+        return x
+"#
             }
-        }.into()
+            HelperFunction::Return => {
+                r#"
+try:
+    _Return
+except NameError:
+    class _Return(Exception):
+        def __init__(self, v): self.value = v
+"#
+            }
+            HelperFunction::Option => {
+                r#"
+try:
+    _Some
+except NameError:
+    class _Some:
+        def __init__(self, v): self.value = v
+        def __str__(self): return f'{self.value}!'
+        def __bool__(self): return True
+    _None = type('_None', (), {'__str__': lambda self: '?', '__bool__': lambda self: False})()
+"#
+            }
+        }
+        .into()
     }
 }
 
@@ -128,7 +157,7 @@ impl PythonEmitter {
         if self.indent == 0 {
             return Err(LanguloError::InternalError {
                 _message: "tried to decrease indentation below base".into(),
-            })
+            });
         }
         self.indent -= 1;
         Ok(())
@@ -170,7 +199,8 @@ impl PythonEmitter {
             return Err(LanguloError::InternalError {
                 _message: format!(
                     "Tried to resolve checkpoint at index {} but line is only {} chars long",
-                    start, scope.current_line.len()
+                    start,
+                    scope.current_line.len()
                 ),
             });
         }
@@ -230,7 +260,7 @@ impl PythonEmitter {
 struct Transpiler {
     emitter: PythonEmitter,
     source: String,
-    is_in_block: bool
+    is_in_block: bool,
 }
 
 impl Transpiler {
@@ -321,6 +351,71 @@ impl Transpiler {
 
     fn visit_inner(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<()> {
         match node.kind() {
+            AstNode::SomeOption => {
+                self.emitter.require_helper(HelperFunction::Option);
+                let child = node.first_child().ok_or(LanguloError::InternalError {
+                    _message: "SomeOption node should have a child".to_string(),
+                })?;
+                self.emitter.grow_current_line_with("_Some(")?;
+                self.visit(&child)?;
+                self.emitter.grow_current_line_with(")")?;
+            }
+            AstNode::NoOption => {
+                self.emitter.require_helper(HelperFunction::Option);
+                self.emitter.grow_current_line_with("_None")?;
+            }
+            AstNode::If => {
+                self.emitter.require_helper(HelperFunction::Option);
+                let children: Vec<_> = node.children().collect();
+                if children.len() != 2 {
+                    return Err(LanguloError::InternalError {
+                        _message: format!("If node found to have {} children", children.len()),
+                    });
+                }
+                let cond = &children[0];
+                let body = &children[1];
+                // transpile body into a function, which is conditionally called.
+                self.emitter.push_scope();
+                let body_var = self.emitter.fresh_hidden_var();
+                self.emitter
+                    .add_full_line_before_current(&format!("def {body_var}():"))?;
+                self.emitter.increase_indentation();
+                self.emitter.mark_checkpoint()?;
+                self.visit(body)?;
+                let return_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
+                self.emitter.add_full_line_before_current(&format!("return {}", return_var))?;
+                self.emitter.decrease_indentation()?;
+                self.end_scope()?;
+
+                self.emitter.grow_current_line_with(&format!("(_Some({body_var}()) if "))?;
+                self.visit(cond)?;
+                self.emitter.grow_current_line_with(" else _None)")?;
+            }
+            AstNode::Else => {
+                self.emitter.require_helper(HelperFunction::Option);
+                let children: Vec<_> = node.children().collect();
+                if children.len() != 2 {
+                    return Err(LanguloError::InternalError {
+                        _message: format!(
+                            "Else node should have 2 children, found {}",
+                            children.len()
+                        ),
+                    });
+                }
+                let option = &children[0];
+                let default = &children[1];
+
+                self.emitter.mark_checkpoint()?;
+                self.visit(option)?;
+                let opt_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
+
+                self.emitter.grow_current_line_with(&format!(
+                    "({}.value if isinstance({}, _Some) else ",
+                    opt_var, opt_var
+                ))?;
+                self.visit(default)?;
+                self.emitter.grow_current_line_with(")")?;
+            }
             AstNode::Root => {
                 for child in node.children() {
                     self.visit(&child)?;
@@ -368,6 +463,14 @@ impl Transpiler {
             AstNode::Lt => self.visit_binary(node, " < ")?,
             AstNode::Geq => self.visit_binary(node, " >= ")?,
             AstNode::Leq => self.visit_binary(node, " <= ")?,
+            AstNode::Ask => {
+                let child = node.first_child().ok_or(LanguloError::InternalError {
+                    _message: "ask node should have a child".to_string(),
+                })?;
+                self.emitter.grow_current_line_with("bool(")?;
+                self.visit(&child)?;
+                self.emitter.grow_current_line_with(")")?;
+            }
             AstNode::Grouping => {
                 let child = node.first_child().ok_or(LanguloError::InternalError {
                     _message: "grouping node should have a child".to_string(),
@@ -502,7 +605,8 @@ impl Transpiler {
                 for (i, child) in children.iter().enumerate() {
                     let is_last = i == children.len() - 1;
 
-                    if is_last { // by default, always treated as a return
+                    if is_last {
+                        // by default, always treated as a return
                         self.emitter.mark_checkpoint()?;
                         self.visit(child)?;
                         let val = self.emitter.resolve_checkpoint_to_hidden_var()?;
@@ -644,7 +748,10 @@ impl Transpiler {
 
     fn end_scope(&mut self) -> LanguloResult<()> {
         let scope = self.emitter.pop_scope()?;
-        self.emitter.current_scope_mut()?.lines.push(scope.lines.join("\n"));
+        self.emitter
+            .current_scope_mut()?
+            .lines
+            .push(scope.lines.join("\n"));
         Ok(())
     }
 
@@ -865,5 +972,36 @@ mod tests {
     fn test_block_return_value() {
         let result = transpile_source("{ return 42 }");
         assert!(result.contains("raise _Return("));
+    }
+
+    ///////////////
+    // options   //
+    ///////////////
+
+    #[test]
+    fn test_some_option() {
+        let result = transpile_source("42!");
+        assert!(result.contains("_Some(42)"));
+    }
+
+    #[test]
+    fn test_none_option() {
+        let result = transpile_source("?");
+        assert!(result.contains("_None"));
+    }
+
+    #[test]
+    fn test_else_with_some() {
+        let result = transpile_source("42! else 0");
+        assert!(result.contains("_Some(42)"));
+        assert!(result.contains(".value if isinstance("));
+        assert!(result.contains(", _Some) else 0"));
+    }
+
+    #[test]
+    fn test_else_with_none() {
+        let result = transpile_source("? else 99");
+        assert!(result.contains("_None"));
+        assert!(result.contains("else 99"));
     }
 }

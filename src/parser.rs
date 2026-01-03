@@ -37,6 +37,7 @@ pub enum AstNode {
     // unary prefix
     Not,
     Print,
+    Ask,
     // function
     FunctionDecl,
     FunctionParams,
@@ -49,6 +50,10 @@ pub enum AstNode {
     StringLit,
     StringPart,
     InterpolationPart,
+    SomeOption,
+    NoOption,
+    If,
+    Else,
 }
 
 // plumbing for rowan
@@ -76,7 +81,7 @@ impl rowan::Language for Langulo {
 // end of plumbing
 
 impl Tok<'_> {
-    fn precedence(&self) -> u8 {
+    fn precedence_as_infix(&self) -> u8 {
         match self {
             Tok::Num(_)
             | Tok::StringLitSingle(_)
@@ -98,11 +103,18 @@ impl Tok<'_> {
             | Tok::Return(_)
             | Tok::Newline(_)
             | Tok::TrailingBackslash(_)
+            | Tok::If(_)
+            | Tok::QuestionMark
+            | Tok::Colon
+            | Tok::Ask(_)
+            | Tok::Not(_)
             | Tok::__Test_Eof => 0,
 
             Tok::Assign => 0b_0000_0001,
 
-            Tok::And(_) | Tok::Or(_) | Tok::Not(_) | Tok::Xor(_) => 0b_0000_0100,
+            Tok::Else(_) => 0b_0000_0010,
+
+            Tok::And(_) | Tok::Or(_) | Tok::Xor(_) => 0b_0000_0100,
             Tok::Eq(_) | Tok::Neq(_) => 0b_0000_1000,
             Tok::Lt | Tok::Gt | Tok::Leq(_) | Tok::Geq(_) => 0b_0000_1100,
 
@@ -111,7 +123,7 @@ impl Tok<'_> {
             Tok::Caret => 0b_1000_0000,
             Tok::Dollar => 0b_1100_0000,
             Tok::At => 0b_1110_0000,
-            Tok::LParen => 0b_1111_0000, // for fn calls
+            Tok::LParen | Tok::ExclamationMark => 0b_1111_0000, // for fn calls
         }
     }
 }
@@ -248,7 +260,7 @@ impl<'src> Parser<'src> {
 
         loop {
             let next_precedence = match self.peek_meaningful_token()? {
-                Some(tok) => tok.precedence(),
+                Some(tok) => tok.precedence_as_infix(),
                 None => break,
             };
             if next_precedence <= precedence {
@@ -264,14 +276,16 @@ impl<'src> Parser<'src> {
         match tok {
             Tok::Num(value) => self.add_leaf_node(AstNode::Num, value),
             Tok::Literal(value) => self.add_leaf_node(AstNode::Literal, value),
+            Tok::QuestionMark => self.add_leaf_node(AstNode::NoOption, "?"),
             Tok::StringLitDouble(value) => self.parse_string_lit(value, "\"")?,
             Tok::StringLitSingle(value) => self.parse_string_lit(value, "'")?,
             Tok::TripleDoubleQuote(value) => self.parse_string_lit(value, "\"\"\"")?,
             Tok::TripleSingleQuote(value) => self.parse_string_lit(value, "'''")?,
             Tok::True(value) | Tok::False(value) => self.add_leaf_node(AstNode::Bool, value),
             Tok::At => self.add_leaf_node(AstNode::Literal, "@"),
-            Tok::Not(_) => self.add_unary_node_prefix(AstNode::Not, tok.precedence())?,
-            Tok::Dollar => self.add_unary_node_prefix(AstNode::Print, tok.precedence())?,
+            Tok::Not(_) => self.add_unary_node_prefix(AstNode::Not, tok.precedence_as_infix())?,
+            Tok::Dollar => self.add_unary_node_prefix(AstNode::Print, tok.precedence_as_infix())?,
+            Tok::Ask(_) => self.add_unary_node_prefix(AstNode::Ask, tok.precedence_as_infix())?,
             Tok::LParen => {
                 self.ast_builder.start_node(AstNode::Grouping.into());
                 self.parse_expr(0)?;
@@ -283,7 +297,7 @@ impl<'src> Parser<'src> {
                 // desugar - <expr> into -1 * <expr>
                 self.ast_builder.start_node(AstNode::Multiply.into());
                 self.add_leaf_node(AstNode::Num, "-1");
-                self.parse_expr(Tok::Star.precedence())?;
+                self.parse_expr(Tok::Star.precedence_as_infix())?;
                 self.ast_builder.finish_node();
             }
             Tok::LBrace => {
@@ -309,6 +323,15 @@ impl<'src> Parser<'src> {
                 self.ast_builder.start_node(AstNode::Return.into());
                 self.ast_builder.token(AstNode::Return.into(), value);
                 self.parse_expr(0)?;
+                self.ast_builder.finish_node();
+            }
+
+            Tok::If(_) => {
+                // if cond expr
+                self.ast_builder.start_node(AstNode::If.into());
+                self.parse_expr(0)?;
+                self.consume_required_tok(Tok::Colon)?;
+                self.parse_expr(Tok::Else("").precedence_as_infix())?;
                 self.ast_builder.finish_node();
             }
 
@@ -349,13 +372,19 @@ impl<'src> Parser<'src> {
             Tok::Geq(_) => self.add_binary_node(AstNode::Geq, checkpoint, precedence)?,
             Tok::Leq(_) => self.add_binary_node(AstNode::Leq, checkpoint, precedence)?,
             Tok::Assign => self.add_binary_node(AstNode::Assign, checkpoint, precedence)?,
+            Tok::Else(_) => self.add_binary_node(AstNode::Else, checkpoint, precedence)?,
+
+            Tok::ExclamationMark => self.add_unary_node_infix(AstNode::SomeOption, checkpoint),
+
             Tok::Dollar => {
                 // print operator can also act on infix operators themselves
                 // e.g., 3 +$ 4 prints 7
                 self.ast_builder
                     .start_node_at(checkpoint, AstNode::Print.into());
                 // make sure that the rest gets parsed with the right precedence, as if printing wasn't being parsed
-                let next_precedence = self.peek_meaningful_token_or_eof_err()?.precedence();
+                let next_precedence = self
+                    .peek_meaningful_token_or_eof_err()?
+                    .precedence_as_infix();
                 self.parse_infix(checkpoint, next_precedence)?;
                 self.ast_builder.finish_node();
             }
@@ -400,6 +429,11 @@ impl<'src> Parser<'src> {
         self.parse_expr(precedence)?;
         self.ast_builder.finish_node();
         Ok(())
+    }
+
+    fn add_unary_node_infix(&mut self, node: AstNode, checkpoint: Checkpoint) {
+        self.ast_builder.start_node_at(checkpoint, node.into());
+        self.ast_builder.finish_node();
     }
 
     /// moves the lexer forward to the next statement, if there's any, in the scope
@@ -600,7 +634,8 @@ impl<'src> Parser<'src> {
 
         // Create a new lexer for the expression slice
         let expr_source = &self.source[start..end];
-        self.ast_builder.token(AstNode::InterpolationPart.into(), expr_source);
+        self.ast_builder
+            .token(AstNode::InterpolationPart.into(), expr_source);
         let inner_lexer = Lexer::new(expr_source).peekable();
 
         // Swap lexers and offset, parse interpolated expr, and restore them
@@ -773,8 +808,8 @@ mod tests {
     fn test_booleans() {
         expect_ast(AstExpectation {
             source: "not true and false xor true",
-            nodes: &[Root, Xor, And, Not, Bool, Bool, Bool],
-            children: &[&[1, 2, 6], &[2, 3, 5], &[3, 4]],
+            nodes: &[Root, Not, Xor, And, Bool, Bool, Bool],
+            children: &[&[1, 2], &[2, 3, 6], &[3, 4, 5]],
             ..Default::default()
         });
     }
@@ -1315,6 +1350,86 @@ mod tests {
 world""""#,
             nodes: &[Root, StringLit, StringPart],
             children: &[&[1, 2]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_some_literal() {
+        expect_ast(AstExpectation {
+            source: "42!",
+            nodes: &[Root, SomeOption, Num],
+            children: &[&[1, 2]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_none_literal() {
+        expect_ast(AstExpectation {
+            source: "?",
+            nodes: &[Root, NoOption],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_else_with_some() {
+        expect_ast(AstExpectation {
+            source: "2! else 3",
+            nodes: &[Root, Else, SomeOption, Num, Num],
+            children: &[&[1, 2, 4], &[2, 3]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_else_with_none() {
+        expect_ast(AstExpectation {
+            source: "? else 4",
+            nodes: &[Root, Else, NoOption, Num],
+            children: &[&[1, 2, 3]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_if_false() {
+        expect_ast(AstExpectation {
+            source: "if false: 1",
+            nodes: &[Root, If, Bool, Num],
+            children: &[&[1, 2, 3]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_if_else_chain() {
+        // if true 2 else 3 -> (if true 2) else 3
+        expect_ast(AstExpectation {
+            source: "if true: 2 else 3",
+            nodes: &[Root, Else, If, Bool, Num, Num],
+            children: &[&[1, 2, 5], &[2, 3, 4]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_if_with_grouped_condition() {
+        expect_ast(AstExpectation {
+            source: "if (x > 0): 42",
+            nodes: &[Root, If, Grouping, Gt, Literal, Num, Num],
+            children: &[&[1, 2, 6], &[2, 3], &[3, 4, 5]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_if_else_chain_complex_body() {
+        expect_ast(AstExpectation {
+            source: "if true: (2+3) else 3",
+            nodes: &[Root, Else, If, Bool, Grouping, Add, Num, Num, Num],
+            children: &[&[1, 2, 8], &[2, 3, 4], &[4, 5], &[5, 6, 7]],
             ..Default::default()
         });
     }

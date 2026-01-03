@@ -40,7 +40,7 @@ operations:
 -3 * (1_000 - 2000)
 ```
 
-## BOOLEANS
+## BOOLEANS AND ASK
 
 ```
 //-
@@ -61,6 +61,12 @@ operations:
 -//
 true and false
 3 == 3 xor 3 != 3
+
+// ask is an operator that returns the truthiness value of an expression. it behaves like casting a python value to bool
+ask 3 // true
+ask 3 - 3 // false
+ask 0! // full options are true
+ask ? // empty options are false
 ```
 
 ## COMMENTS
@@ -84,29 +90,29 @@ n = 2
 2 + b = 4 // sets b to 4 and evaluates to 6
 ```
 
-## STATEMENTS AND GROUPINGS
+## EXPRESSIONS AND GROUPINGS
 
 ```
 //-
-in langulo, a program is composed by a sequence of statements.
-a statement is any expression that converts to a value.
-statements are separated by newlines.
-indenting statements has no semantic meaning.
+in langulo, a program is composed by a sequence of expressions.
+an expression is any piece of code that converts to a value.
+expressions are separated by newlines.
+indenting expressions has no semantic meaning.
 -//
 1 // --> 1
     2 + 3 // --> 5
     
 //-
-if you wish for a single statement to span multiple lines, you can use `\` to signal its continuation.
+if you wish for a single expression to span multiple lines, you can use `\` to signal its continuation.
 -//
 1\
     + 2 +\ 
     3 // --> 6
 
 //- 
-to group multiple statements together into a single statement, called a grouping statement,
-you can use `{` `}`. a grouping statement evaluates to its last statement, 
-unless it encounters a return statement. in that case, it evaluates to the return value.
+to group multiple expressions together into a single expression, called a grouping expression,
+you can use `{` `}`. a grouping expression evaluates to its last expression, 
+unless it encounters a return expression. in that case, it evaluates to the return value.
 -//
 {
     "hello"
@@ -138,15 +144,13 @@ nine = 2\
     plus(3)\
     plus(4)
     
-// if you need a larger function body use a grouping statement
+// if you need a larger function body use a grouping expression
 // | @ | {
 //  result = @ + 1
 //  result * 2
 //  return "result is {tmp}"
 // }
 ```
-
-# NOT ADDED BUT DESIGN IS LARGELY SET
 
 ## STRINGS
 
@@ -171,29 +175,27 @@ plus
 {2+3}"
 ```
 
-
-
-# NOT ADDED AND DESIGN IS NOT SET
-
 ## OPTIONS AND IF/ELSE
 
 ```
 // an option is an explicit way to indicate that a value could be missing
 some_num = 2!
 no_num = ?
-[1, 2, 3][0] // 1!
-[1, 2, 3][4] // ?
-if false 1 // ?, with lazy evaluation of the body
+// arrays aren't implemented yet but array indexing will also return an option
+// [1, 2, 3][0] // 1!
+// [1, 2, 3][4] // ?
+
+// if <cond>: <expr> -> "?" if condition was false, otherwise "expr!"
+if false: 1 // ?, with lazy evaluation of the body
+if true: 2 // 2!
+
+// <option> else <expr> -> inner if option was "inner!", otherwise "expr" 
 2! else 3 // 2
-// streaked together, if <cond> <expr1> else <expr2> behaves like expected
-
-
-
-// "if" is a way to w to a boolean condition
-maybe_number = if true 1 // --> 1?
-// else unwraps an option safely, giving a fallback value if the option is empty
-some_number = maybe_number else 2
+? else 4 // 4
+// note that streaked together, if <cond>: <expr1> else <expr2> behaves like expected
 ```
+
+# NOT ADDED AND DESIGN IS NOT SET
 
 ## ASSOCIATIONS
 

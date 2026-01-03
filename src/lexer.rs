@@ -86,6 +86,18 @@ pub enum Tok<'a> {
     Pipe,
     #[regex(r"@")]
     At,
+    #[regex(r"\?")]
+    QuestionMark,
+    #[regex(r"!")]
+    ExclamationMark,
+    #[regex(r"if")]
+    If(&'a str),
+    #[regex(r":")]
+    Colon,
+    #[regex(r"else")]
+    Else(&'a str),
+    #[regex(r"ask")]
+    Ask(&'a str),
     // just to assert during tests that we matched the entire input
     #[allow(dead_code, non_camel_case_types)]
     __Test_Eof,
@@ -176,6 +188,12 @@ impl Tok<'_> {
             Tok::LBrace => "{",
             Tok::RBrace => "}",
             Tok::Return(_) => "return",
+            Tok::QuestionMark => "?",
+            Tok::ExclamationMark => "!",
+            Tok::If(_) => "if",
+            Tok::Else(_) => "else",
+            Tok::Ask(_) => "ask",
+            Tok::Colon => ":",
             Tok::LineContinuation(_) => "\\",
             Tok::Newline(_) => "\n",
         }
@@ -206,6 +224,9 @@ impl Tok<'_> {
             | Tok::Newline(slice)
             | Tok::Return(slice)
             | Tok::TrailingBackslash(slice)
+            | Tok::If(slice)
+            | Tok::Else(slice)
+            | Tok::Ask(slice)
             | Tok::Whitespace(slice) => slice.len(),
 
             Tok::Plus
@@ -224,6 +245,9 @@ impl Tok<'_> {
             | Tok::Assign
             | Tok::Comma
             | Tok::Pipe
+            | Tok::QuestionMark
+            | Tok::ExclamationMark
+            | Tok::Colon
             | Tok::At => 1,
             Tok::__Test_Eof => 0,
         }
@@ -308,7 +332,7 @@ lines-//5
     #[test]
     fn test_others() {
         expect_tokens(
-            "()$=,|@{ x }",
+            "()$=,|@{ x }!? if else:",
             &[
                 LParen,
                 RParen,
@@ -322,6 +346,13 @@ lines-//5
                 Literal("x"),
                 Whitespace(" "),
                 RBrace,
+                ExclamationMark,
+                QuestionMark,
+                Whitespace(" "),
+                If("if"),
+                Whitespace(" "),
+                Else("else"),
+                Colon,
                 __Test_Eof,
             ],
         );

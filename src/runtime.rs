@@ -717,4 +717,112 @@ world""""#
         assert_eq!(ctx.eval_langulo_display(r#"x = 42"#), "42");
         assert_eq!(ctx.eval_langulo_display(r#""{x}""#), "42");
     }
+
+    ///////////////
+    // options   //
+    ///////////////
+
+    #[test]
+    fn test_some_basic() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("42!"), "42!");
+    }
+
+    #[test]
+    fn test_none_basic() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("?"), "?");
+    }
+
+    #[test]
+    fn test_some_else_returns_value() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("42! else 0"), "42");
+    }
+
+    #[test]
+    fn test_none_else_returns_default() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("? else 99"), "99");
+    }
+
+    #[test]
+    fn test_if_true_returns_some() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("if true: 42"), "42!");
+    }
+
+    #[test]
+    fn test_if_false_returns_none() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("if false: 42"), "?");
+    }
+
+    #[test]
+    fn test_if_else_true_case() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("if true: 2 else 3"), "2");
+    }
+
+    #[test]
+    fn test_if_else_false_case() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("if false: 2 else 3"), "3");
+    }
+
+    #[test]
+    fn test_if_with_complex_condition() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("if (1 < 2): 10 else 20"), "10");
+        assert_eq!(ctx.eval_langulo_display("if (1 > 2): 10 else 20"), "20");
+    }
+
+    #[test]
+    fn test_if_with_complex_body() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("if true: (2 + 3) else 0"), "5");
+    }
+
+    #[test]
+    fn test_nested_if_else() {
+        let ctx = TestContext::new();
+        // if false: 1 else if true: 2 else 3
+        // -> ? else (if true: 2 else 3) -> 2
+        assert_eq!(ctx.eval_langulo_display("if false: 1 else if true: 2 else 3"), "2");
+    }
+
+    #[test]
+    fn test_option_in_variable() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("x = 5!"), "5!");
+        assert_eq!(ctx.eval_langulo_display("x else 0"), "5");
+    }
+
+    #[test]
+    fn test_none_in_variable() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("y = ?"), "?");
+        assert_eq!(ctx.eval_langulo_display("y else 99"), "99");
+    }
+
+    #[test]
+    fn test_some_with_expression() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("(1 + 2)!"), "3!");
+    }
+
+    #[test]
+    fn test_chained_else() {
+        let ctx = TestContext::new();
+        // ? else ? else 42 -> (? else ?) else 42 -> ? else 42 -> 42
+        assert_eq!(ctx.eval_langulo_display("? else ? else 42"), "42");
+    }
+
+    #[test]
+    fn test_map_option_bug() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("map = |@, fn| if ask @: fn(@ else ?)"), "<function>");
+        assert_eq!(ctx.eval_langulo_display("5! @ map(|x|x+1)"), "6!");
+        assert_eq!(ctx.eval_langulo_display("? @ map(|x|x+1)"), "?");
+    }
 }

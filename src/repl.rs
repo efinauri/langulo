@@ -180,8 +180,8 @@ impl Repl {
             }
         };
 
-        let python_code = match transpile(&ast, input) {
-            Ok(code) => code,
+        let statements = match transpile(&ast, input) {
+            Ok(stmts) => stmts,
             Err(e) => {
                 self.print_error(&e);
                 return;
@@ -189,10 +189,12 @@ impl Repl {
         };
 
         if self.show_python {
-            println!("{} {}", "→".dimmed(), python_code.yellow());
+            for stmt in &statements {
+                println!("{} {}", "→".dimmed(), stmt.yellow());
+            }
         }
 
-        match eval_python(&python_code) {
+        match eval_python(&statements) {
             Ok(result) => {
                 println!(
                     "{} {} {}",

@@ -34,37 +34,37 @@ pub fn init_python() -> LanguloResult<()> {
     })
 }
 
-pub fn eval_python(code: &str) -> LanguloResult<EvalResult> {
-    eval_python_internal(code, PYTHON_GLOBALS.get().unwrap())
+pub fn eval_python(statements: &[String]) -> LanguloResult<EvalResult> {
+    eval_python_internal(statements, PYTHON_GLOBALS.get().unwrap())
 }
 
-pub fn eval_python_internal(code: &str, globals: &Py<PyDict>) -> LanguloResult<EvalResult> {
+pub fn eval_python_internal(
+    statements: &[String],
+    globals: &Py<PyDict>,
+) -> LanguloResult<EvalResult> {
     Python::with_gil(|py| {
         let globals = globals.as_ref(py);
-        // Split into statements and final expression
-        let lines: Vec<&str> = code.lines().collect();
 
-        if lines.is_empty() {
+        if statements.is_empty() {
             return Err(LanguloError::PythonError {
                 _message: "Empty code".into(),
             });
         }
 
-        // Run all lines except the last as statements
-        if lines.len() > 1 {
-            let statements = lines[..lines.len() - 1].join("\n");
-            py.run(&statements, Some(globals), None)
+        // Execute all statements except the last
+        for stmt in &statements[..statements.len() - 1] {
+            py.run(stmt, Some(globals), None)
                 .map_err(|e| LanguloError::PythonError {
                     _message: format!("Statement error: {}", e),
                 })?;
         }
 
-        // Eval the last line as an expression
-        let expr = lines.last().unwrap();
-        match py.eval(expr, Some(globals), None) {
+        // Eval the last statement as an expression
+        let last = statements.last().unwrap();
+        match py.eval(last, Some(globals), None) {
             Ok(result) => {
                 let display = result
-                    .repr()
+                    .str()
                     .map(|r| r.to_string())
                     .unwrap_or_else(|_| "<unable to display>".into());
 
@@ -131,31 +131,51 @@ mod tests {
     use crate::parser::parse;
     use crate::transpile::transpile;
 
-    fn setup() {
-        let _ = init_python();
+    /// Isolated test context with its own Python globals.
+    /// Each test creates its own TestContext to avoid state pollution.
+    struct TestContext {
+        globals: Py<PyDict>,
     }
 
-    /// Helper: transpile Langulo source and evaluate it
-    fn eval_langulo(source: &str) -> LanguloResult<EvalResult> {
-        setup();
-        let ast = parse(source).map_err(|e| LanguloError::PythonError {
-            _message: format!("Parse error: {:?}", e),
-        })?;
-        let python_code = transpile(&ast, source).map_err(|e| LanguloError::PythonError {
-            _message: format!("Transpile error: {:?}", e),
-        })?;
-        println!("Transpiled to:\n{}", python_code);
-        eval_python(&python_code)
-    }
+    impl TestContext {
+        fn new() -> Self {
+            Python::with_gil(|py| {
+                let globals = PyDict::new(py);
 
-    /// Helper: transpile and evaluate, return the display string
-    fn eval_langulo_display(source: &str) -> String {
-        let result = eval_langulo(source).unwrap().display;
-        // Simplify function representation
-        if result.starts_with("<function") {
-            "<function>".to_string()
-        } else {
-            result
+                // Import math like the real runtime does
+                if let Ok(math) = py.import("math") {
+                    let _ = globals.set_item("math", math);
+                }
+
+                TestContext {
+                    globals: globals.into(),
+                }
+            })
+        }
+
+        fn eval_python(&self, statements: &[String]) -> LanguloResult<EvalResult> {
+            eval_python_internal(statements, &self.globals)
+        }
+
+        fn eval_langulo(&self, source: &str) -> LanguloResult<EvalResult> {
+            let ast = parse(source).map_err(|e| LanguloError::PythonError {
+                _message: format!("Parse error: {:?}", e),
+            })?;
+            let python_code = transpile(&ast, source).map_err(|e| LanguloError::PythonError {
+                _message: format!("Transpile error: {:?}", e),
+            })?;
+            println!("Transpiled to:\n{:?}", python_code);
+            self.eval_python(&python_code)
+        }
+
+        fn eval_langulo_display(&self, source: &str) -> String {
+            let result = self.eval_langulo(source).unwrap().display;
+            // Simplify function representation
+            if result.starts_with("<function") {
+                "<function>".to_string()
+            } else {
+                result
+            }
         }
     }
 
@@ -165,10 +185,10 @@ mod tests {
 
     #[test]
     fn test_bug_print_in_expression_multiline() {
+        let ctx = TestContext::new();
         // This was failing because eval_python couldn't handle statements + expression
         // Error was: SyntaxError: invalid syntax
-        setup();
-        let result = eval_langulo("3 + $(4+2) * 2");
+        let result = ctx.eval_langulo("3 + $(4+2) * 2");
         assert!(result.is_ok(), "Failed with: {:?}", result.err());
         // 4+2 = 6, printed, then 3 + 6 * 2 = 3 + 12 = 15
         assert_eq!(result.unwrap().display, "15");
@@ -180,47 +200,48 @@ mod tests {
 
     #[test]
     fn test_eval_simple() {
-        setup();
-        let result = eval_python("1 + 2").unwrap();
+        let ctx = TestContext::new();
+        let result = ctx.eval_python(&["1 + 2".into()]).unwrap();
         assert_eq!(result.display, "3");
         assert_eq!(result.py_type, "int");
     }
 
     #[test]
     fn test_eval_float() {
-        setup();
-        let result = eval_python("3.14 * 2").unwrap();
+        let ctx = TestContext::new();
+        let result = ctx.eval_python(&["3.14 * 2".into()]).unwrap();
         assert!(result.display.starts_with("6.28"));
         assert_eq!(result.py_type, "float");
     }
 
     #[test]
     fn test_eval_power() {
-        setup();
-        let result = eval_python("2 ** 10").unwrap();
+        let ctx = TestContext::new();
+        let result = ctx.eval_python(&["2 ** 10".into()]).unwrap();
         assert_eq!(result.display, "1024");
     }
 
     #[test]
     fn test_underscore_variable() {
-        setup();
-        let _ = eval_python("42").unwrap();
-        let result = eval_python("_ + 1").unwrap();
+        let ctx = TestContext::new();
+        let _ = ctx.eval_python(&["42".into()]).unwrap();
+        let result = ctx.eval_python(&["_ + 1".into()]).unwrap();
         assert_eq!(result.display, "43");
     }
 
     #[test]
     fn test_math_available() {
-        setup();
-        let result = eval_python("math.pi").unwrap();
+        let ctx = TestContext::new();
+        let result = ctx.eval_python(&["math.pi".into()]).unwrap();
         assert!(result.display.starts_with("3.14"));
     }
 
     #[test]
     fn test_multiline_statements_then_expression() {
-        setup();
-        let code = "x = 10\ny = 20\nx + y";
-        let result = eval_python(code).unwrap();
+        let ctx = TestContext::new();
+        let result = ctx
+            .eval_python(&["x = 10".into(), "y = 20".into(), "x + y".into()])
+            .unwrap();
         assert_eq!(result.display, "30");
     }
 
@@ -230,312 +251,358 @@ mod tests {
 
     #[test]
     fn test_langulo_simple_number() {
-        assert_eq!(eval_langulo_display("42"), "42");
-        assert_eq!(eval_langulo_display("3.14"), "3.14");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("42"), "42");
+        assert_eq!(ctx.eval_langulo_display("3.14"), "3.14");
     }
 
     #[test]
     fn test_langulo_arithmetic() {
-        assert_eq!(eval_langulo_display("1 + 2"), "3");
-        assert_eq!(eval_langulo_display("10 - 3"), "7");
-        assert_eq!(eval_langulo_display("4 * 5"), "20");
-        assert_eq!(eval_langulo_display("15 / 3"), "5.0");
-        assert_eq!(eval_langulo_display("17 % 5"), "2");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("1 + 2"), "3");
+        assert_eq!(ctx.eval_langulo_display("10 - 3"), "7");
+        assert_eq!(ctx.eval_langulo_display("4 * 5"), "20");
+        assert_eq!(ctx.eval_langulo_display("15 / 3"), "5.0");
+        assert_eq!(ctx.eval_langulo_display("17 % 5"), "2");
     }
 
     #[test]
     fn test_langulo_power() {
-        assert_eq!(eval_langulo_display("2 ^ 10"), "1024");
-        assert_eq!(eval_langulo_display("3 ^ 3"), "27");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("2 ^ 10"), "1024");
+        assert_eq!(ctx.eval_langulo_display("3 ^ 3"), "27");
     }
 
     #[test]
     fn test_langulo_precedence() {
+        let ctx = TestContext::new();
         // 2 + 3 * 4 = 2 + 12 = 14
-        assert_eq!(eval_langulo_display("2 + 3 * 4"), "14");
+        assert_eq!(ctx.eval_langulo_display("2 + 3 * 4"), "14");
         // 2 * 3 + 4 = 6 + 4 = 10
-        assert_eq!(eval_langulo_display("2 * 3 + 4"), "10");
+        assert_eq!(ctx.eval_langulo_display("2 * 3 + 4"), "10");
         // 2 ^ 3 * 4 = 8 * 4 = 32
-        assert_eq!(eval_langulo_display("2 ^ 3 * 4"), "32");
+        assert_eq!(ctx.eval_langulo_display("2 ^ 3 * 4"), "32");
     }
 
     #[test]
     fn test_langulo_grouping() {
-        assert_eq!(eval_langulo_display("(2 + 3) * 4"), "20");
-        assert_eq!(eval_langulo_display("2 * (3 + 4)"), "14");
-        assert_eq!(eval_langulo_display("((1 + 2) * (3 + 4))"), "21");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("(2 + 3) * 4"), "20");
+        assert_eq!(ctx.eval_langulo_display("2 * (3 + 4)"), "14");
+        assert_eq!(ctx.eval_langulo_display("((1 + 2) * (3 + 4))"), "21");
     }
 
     #[test]
     fn test_langulo_booleans() {
-        assert_eq!(eval_langulo_display("true"), "True");
-        assert_eq!(eval_langulo_display("false"), "False");
-        assert_eq!(eval_langulo_display("true and false"), "False");
-        assert_eq!(eval_langulo_display("true or false"), "True");
-        assert_eq!(eval_langulo_display("not true"), "False");
-        assert_eq!(eval_langulo_display("not false"), "True");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("true"), "True");
+        assert_eq!(ctx.eval_langulo_display("false"), "False");
+        assert_eq!(ctx.eval_langulo_display("true and false"), "False");
+        assert_eq!(ctx.eval_langulo_display("true or false"), "True");
+        assert_eq!(ctx.eval_langulo_display("not true"), "False");
+        assert_eq!(ctx.eval_langulo_display("not false"), "True");
     }
 
     #[test]
     fn test_langulo_comparisons() {
-        assert_eq!(eval_langulo_display("1 == 1"), "True");
-        assert_eq!(eval_langulo_display("1 == 2"), "False");
-        assert_eq!(eval_langulo_display("1 != 2"), "True");
-        assert_eq!(eval_langulo_display("1 < 2"), "True");
-        assert_eq!(eval_langulo_display("2 > 1"), "True");
-        assert_eq!(eval_langulo_display("1 <= 1"), "True");
-        assert_eq!(eval_langulo_display("1 >= 1"), "True");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("1 == 1"), "True");
+        assert_eq!(ctx.eval_langulo_display("1 == 2"), "False");
+        assert_eq!(ctx.eval_langulo_display("1 != 2"), "True");
+        assert_eq!(ctx.eval_langulo_display("1 < 2"), "True");
+        assert_eq!(ctx.eval_langulo_display("2 > 1"), "True");
+        assert_eq!(ctx.eval_langulo_display("1 <= 1"), "True");
+        assert_eq!(ctx.eval_langulo_display("1 >= 1"), "True");
     }
 
     #[test]
     fn test_langulo_print_simple() {
+        let ctx = TestContext::new();
         // $3 should print 3 and return 3
-        assert_eq!(eval_langulo_display("$3"), "3");
+        assert_eq!(ctx.eval_langulo_display("$3"), "3");
     }
 
     #[test]
     fn test_langulo_print_expression() {
+        let ctx = TestContext::new();
         // $(1 + 2) should print 3 and return 3
-        assert_eq!(eval_langulo_display("$(1 + 2)"), "3");
+        assert_eq!(ctx.eval_langulo_display("$(1 + 2)"), "3");
     }
 
     #[test]
     fn test_langulo_print_in_arithmetic() {
+        let ctx = TestContext::new();
         // 1 + $2 + 3 = 1 + 2 + 3 = 6 (and prints 2)
-        assert_eq!(eval_langulo_display("1 + $2 + 3"), "6");
+        assert_eq!(ctx.eval_langulo_display("1 + $2 + 3"), "6");
     }
 
     #[test]
     fn test_langulo_nested_print() {
+        let ctx = TestContext::new();
         // $($1) should print 1, then print 1 again, return 1
-        assert_eq!(eval_langulo_display("$($1)"), "1");
+        assert_eq!(ctx.eval_langulo_display("$($1)"), "1");
     }
 
     #[test]
     fn test_langulo_complex_expression_with_print() {
+        let ctx = TestContext::new();
         // (1 + $2) * (3 + $4) = (1 + 2) * (3 + 4) = 3 * 7 = 21
-        assert_eq!(eval_langulo_display("(1 + $2) * (3 + $4)"), "21");
+        assert_eq!(ctx.eval_langulo_display("(1 + $2) * (3 + $4)"), "21");
     }
 
     #[test]
     fn assignments() {
-        assert_eq!(eval_langulo_display("y = 2"), "2");
-        assert_eq!(eval_langulo_display("y"), "2");
-        assert_eq!(eval_langulo_display("3 + (y=4)"), "7");
-        assert_eq!(eval_langulo_display("y"), "4");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("y = 2"), "2");
+        assert_eq!(ctx.eval_langulo_display("y"), "2");
+        assert_eq!(ctx.eval_langulo_display("3 + (y=4)"), "7");
+        assert_eq!(ctx.eval_langulo_display("y"), "4");
     }
 
     #[test]
     fn print_assignment() {
-        assert_eq!(eval_langulo_display("x $= 1+2"), "3");
-        assert_eq!(eval_langulo_display("x"), "3");
-        assert_eq!(eval_langulo_display("$x = 44"), "44");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("x $= 1+2"), "3");
+        assert_eq!(ctx.eval_langulo_display("x"), "3");
+        assert_eq!(ctx.eval_langulo_display("$x = 44"), "44");
     }
 
     #[test]
     fn function_definition() {
+        let ctx = TestContext::new();
         // Define a simple function
-        assert_eq!(eval_langulo_display("double = |x| x * 2"), "<function>");
-        assert_eq!(eval_langulo_display("double(5)"), "10");
-        assert_eq!(eval_langulo_display("double(3)"), "6");
+        assert_eq!(ctx.eval_langulo_display("double = |x| x * 2"), "<function>");
+        assert_eq!(ctx.eval_langulo_display("double(5)"), "10");
+        assert_eq!(ctx.eval_langulo_display("double(3)"), "6");
     }
 
     #[test]
     fn function_two_params() {
-        assert_eq!(eval_langulo_display("add = |a, b| a + b"), "<function>");
-        assert_eq!(eval_langulo_display("add(1, 2)"), "3");
-        assert_eq!(eval_langulo_display("add(10, 20)"), "30");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("add = |a, b| a + b"), "<function>");
+        assert_eq!(ctx.eval_langulo_display("add(1, 2)"), "3");
+        assert_eq!(ctx.eval_langulo_display("add(10, 20)"), "30");
     }
 
     #[test]
     fn function_no_params() {
-        assert_eq!(eval_langulo_display("always_five = || 5"), "<function>");
-        assert_eq!(eval_langulo_display("always_five()"), "5");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("always_five = || 5"), "<function>");
+        assert_eq!(ctx.eval_langulo_display("always_five()"), "5");
     }
 
     #[test]
     fn function_complex_body() {
+        let ctx = TestContext::new();
         assert_eq!(
-            eval_langulo_display("calc = |x, y| (x + y) * 2"),
+            ctx.eval_langulo_display("calc = |x, y| (x + y) * 2"),
             "<function>"
         );
-        assert_eq!(eval_langulo_display("calc(3, 4)"), "14");
+        assert_eq!(ctx.eval_langulo_display("calc(3, 4)"), "14");
     }
 
     #[test]
     fn function_nested_calls() {
-        assert_eq!(eval_langulo_display("inc = |x| x + 1"), "<function>");
-        assert_eq!(eval_langulo_display("dec = |x| x - 1"), "<function>");
-        assert_eq!(eval_langulo_display("inc(dec(5))"), "5");
-        assert_eq!(eval_langulo_display("inc(inc(inc(0)))"), "3");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("inc = |x| x + 1"), "<function>");
+        assert_eq!(ctx.eval_langulo_display("dec = |x| x - 1"), "<function>");
+        assert_eq!(ctx.eval_langulo_display("inc(dec(5))"), "5");
+        assert_eq!(ctx.eval_langulo_display("inc(inc(inc(0)))"), "3");
     }
 
     #[test]
     fn function_in_expression() {
-        assert_eq!(eval_langulo_display("square = |x| x * x"), "<function>");
-        assert_eq!(eval_langulo_display("1 + square(3) + 2"), "12");
-        assert_eq!(eval_langulo_display("square(2) * square(3)"), "36");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("square = |x| x * x"), "<function>");
+        assert_eq!(ctx.eval_langulo_display("1 + square(3) + 2"), "12");
+        assert_eq!(ctx.eval_langulo_display("square(2) * square(3)"), "36");
     }
 
     #[test]
     fn postfix_call_simple() {
-        assert_eq!(eval_langulo_display("double = |@| @ * 2"), "<function>");
-        assert_eq!(eval_langulo_display("5 @ double()"), "10");
-        assert_eq!(eval_langulo_display("3 @ double()"), "6");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("double = |@| @ * 2"), "<function>");
+        assert_eq!(ctx.eval_langulo_display("5 @ double()"), "10");
+        assert_eq!(ctx.eval_langulo_display("3 @ double()"), "6");
     }
 
     #[test]
     fn postfix_call_with_args() {
-        assert_eq!(eval_langulo_display("plus = |@, n| @ + n"), "<function>");
-        assert_eq!(eval_langulo_display("3 @ plus(2)"), "5");
-        assert_eq!(eval_langulo_display("10 @ plus(5)"), "15");
+        let ctx = TestContext::new();
+        assert_eq!(
+            ctx.eval_langulo_display("plus = |@, n| @ + n"),
+            "<function>"
+        );
+        assert_eq!(ctx.eval_langulo_display("3 @ plus(2)"), "5");
+        assert_eq!(ctx.eval_langulo_display("10 @ plus(5)"), "15");
     }
 
     #[test]
     fn postfix_call_chained() {
-        assert_eq!(eval_langulo_display("inc = |@| @ + 1"), "<function>");
-        assert_eq!(eval_langulo_display("double = |@| @ * 2"), "<function>");
-        assert_eq!(eval_langulo_display("0 @ inc() @ inc() @ inc()"), "3");
-        assert_eq!(eval_langulo_display("2 @ double() @ double()"), "8");
-        assert_eq!(eval_langulo_display("1 @ inc() @ double()"), "4");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("inc = |@| @ + 1"), "<function>");
+        assert_eq!(ctx.eval_langulo_display("double = |@| @ * 2"), "<function>");
+        assert_eq!(ctx.eval_langulo_display("0 @ inc() @ inc() @ inc()"), "3");
+        assert_eq!(ctx.eval_langulo_display("2 @ double() @ double()"), "8");
+        assert_eq!(ctx.eval_langulo_display("1 @ inc() @ double()"), "4");
     }
 
     #[test]
     fn postfix_call_mixed_styles() {
-        assert_eq!(eval_langulo_display("add = |a, b| a + b"), "<function>");
-        assert_eq!(eval_langulo_display("inc = |@| @ + 1"), "<function>");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("add = |a, b| a + b"), "<function>");
+        assert_eq!(ctx.eval_langulo_display("inc = |@| @ + 1"), "<function>");
         // Mix prefix and postfix calls
-        assert_eq!(eval_langulo_display("add(1, 2) @ inc()"), "4");
-        assert_eq!(eval_langulo_display("5 @ inc() + 10"), "16");
+        assert_eq!(ctx.eval_langulo_display("add(1, 2) @ inc()"), "4");
+        assert_eq!(ctx.eval_langulo_display("5 @ inc() + 10"), "16");
     }
 
     #[test]
     fn function_with_print() {
-        assert_eq!(eval_langulo_display("f = |x| $x + 1"), "<function>");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("f = |x| $x + 1"), "<function>");
         // When called, $x should print x and return x+1
-        assert_eq!(eval_langulo_display("f(5)"), "6");
+        assert_eq!(ctx.eval_langulo_display("f(5)"), "6");
     }
 
     #[test]
     fn function_closure_behavior() {
+        let ctx = TestContext::new();
         // Functions should capture variables from outer scope
-        assert_eq!(eval_langulo_display("multiplier = 3"), "3");
+        assert_eq!(ctx.eval_langulo_display("multiplier = 3"), "3");
         assert_eq!(
-            eval_langulo_display("scale = |x| x * multiplier"),
+            ctx.eval_langulo_display("scale = |x| x * multiplier"),
             "<function>"
         );
-        assert_eq!(eval_langulo_display("scale(4)"), "12");
+        assert_eq!(ctx.eval_langulo_display("scale(4)"), "12");
     }
 
     #[test]
     fn function_as_argument() {
+        let ctx = TestContext::new();
         assert_eq!(
-            eval_langulo_display("apply_twice = |f, x| f(f(x))"),
+            ctx.eval_langulo_display("apply_twice = |f, x| f(f(x))"),
             "<function>"
         );
-        assert_eq!(eval_langulo_display("inc = |x| x + 1"), "<function>");
-        assert_eq!(eval_langulo_display("apply_twice(inc, 0)"), "2");
+        assert_eq!(ctx.eval_langulo_display("inc = |x| x + 1"), "<function>");
+        assert_eq!(ctx.eval_langulo_display("apply_twice(inc, 0)"), "2");
     }
 
     #[test]
     fn function_returning_function() {
+        let ctx = TestContext::new();
         assert_eq!(
-            eval_langulo_display("make_adder = |n| |x| x + n"),
+            ctx.eval_langulo_display("make_adder = |n| |x| x + n"),
             "<function>"
         );
         assert_eq!(
-            eval_langulo_display("addfive = make_adder(5)"),
+            ctx.eval_langulo_display("addfive = make_adder(5)"),
             "<function>"
         );
-        assert_eq!(eval_langulo_display("addfive(10)"), "15");
+        assert_eq!(ctx.eval_langulo_display("addfive(10)"), "15");
     }
 
     #[test]
     fn postfix_with_expression_arg() {
-        assert_eq!(eval_langulo_display("plus = |@, n| @ + n"), "<function>");
-        assert_eq!(eval_langulo_display("3 @ plus(1 + 1)"), "5");
-        assert_eq!(eval_langulo_display("(1 + 2) @ plus(3 * 2)"), "9");
+        let ctx = TestContext::new();
+        assert_eq!(
+            ctx.eval_langulo_display("plus = |@, n| @ + n"),
+            "<function>"
+        );
+        assert_eq!(ctx.eval_langulo_display("3 @ plus(1 + 1)"), "5");
+        assert_eq!(ctx.eval_langulo_display("(1 + 2) @ plus(3 * 2)"), "9");
     }
 
     #[test]
     fn function_boolean_operations() {
+        let ctx = TestContext::new();
         assert_eq!(
-            eval_langulo_display("is_positive = |x| x > 0"),
+            ctx.eval_langulo_display("is_positive = |x| x > 0"),
             "<function>"
         );
-        assert_eq!(eval_langulo_display("is_positive(5)"), "True");
-        assert_eq!(eval_langulo_display("is_positive(-3)"), "False");
+        assert_eq!(ctx.eval_langulo_display("is_positive(5)"), "True");
+        assert_eq!(ctx.eval_langulo_display("is_positive(-3)"), "False");
         assert_eq!(
-            eval_langulo_display("both_positive = |a, b| a > 0 and b > 0"),
+            ctx.eval_langulo_display("both_positive = |a, b| a > 0 and b > 0"),
             "<function>"
         );
-        assert_eq!(eval_langulo_display("both_positive(1, 2)"), "True");
-        assert_eq!(eval_langulo_display("both_positive(1, -1)"), "False");
+        assert_eq!(ctx.eval_langulo_display("both_positive(1, 2)"), "True");
+        assert_eq!(ctx.eval_langulo_display("both_positive(1, -1)"), "False");
     }
 
     #[test]
     fn test_block_evaluates_to_last() {
-        assert_eq!(eval_langulo_display("{ 1\n2\n3 }"), "3");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("{ 1\n2\n3 }"), "3");
     }
 
     #[test]
     fn test_block_with_assignments() {
-        assert_eq!(eval_langulo_display("{ x = 1\ny = 2\nx + y }"), "3");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("{ x = 1\ny = 2\nx + y }"), "3");
     }
 
     #[test]
     fn test_block_return_early() {
-        assert_eq!(eval_langulo_display("{ return 42\n99 }"), "42");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("{ return 42\n99 }"), "42");
     }
 
     #[test]
     fn test_block_return_middle() {
+        let ctx = TestContext::new();
         assert_eq!(
-            eval_langulo_display("{ x = 1\nreturn x + 1\nx + 100 }"),
+            ctx.eval_langulo_display("{ x = 1\nreturn x + 1\nx + 100 }"),
             "2"
         );
     }
 
     #[test]
     fn test_block_no_return() {
-        assert_eq!(eval_langulo_display("{ x = 5\nx * 2 }"), "10");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("{ x = 5\nx * 2 }"), "10");
     }
 
     #[test]
     fn test_block_in_expression() {
-        assert_eq!(eval_langulo_display("1 + { 2 }"), "3");
-        assert_eq!(eval_langulo_display("{ 2 } + { 3 }"), "5");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("1 + { 2 }"), "3");
+        assert_eq!(ctx.eval_langulo_display("{ 2 } + { 3 }"), "5");
     }
 
     #[test]
     fn test_nested_blocks() {
-        assert_eq!(eval_langulo_display("{ { 42 } }"), "42");
-        assert_eq!(eval_langulo_display("{ x = { 1 + 2 }\nx * 2 }"), "6");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("{ { 42 } }"), "42");
+        assert_eq!(ctx.eval_langulo_display("{ x = { 1 + 2 }\nx * 2 }"), "6");
     }
 
     #[test]
     fn test_block_scoping() {
+        let ctx = TestContext::new();
         // Variables defined in block should persist (no lexical scoping yet)
-        assert_eq!(eval_langulo_display("{ x = 42 }"), "42");
-        assert_eq!(eval_langulo_display("x"), "42");
+        assert_eq!(ctx.eval_langulo_display("{ uux = 42 }"), "42");
+        assert_eq!(ctx.eval_langulo_display("uux"), "42");
     }
 
     #[test]
     fn test_function_with_block() {
+        let ctx = TestContext::new();
         assert_eq!(
-            eval_langulo_display("f = |x| { y = x + 1\ny * 2 }"),
+            ctx.eval_langulo_display("f = |x| { y = x + 1\ny * 2 }"),
             "<function>"
         );
-        assert_eq!(eval_langulo_display("f(5)"), "12");
+        assert_eq!(ctx.eval_langulo_display("f(5)"), "12");
     }
 
     #[test]
     fn test_function_with_block_return() {
+        let ctx = TestContext::new();
         assert_eq!(
-            eval_langulo_display("g = |x| { return x * 2\nx + 100 }"),
+            ctx.eval_langulo_display("g = |x| { return x * 2\nx + 100 }"),
             "<function>"
         );
-        assert_eq!(eval_langulo_display("g(5)"), "10");
+        assert_eq!(ctx.eval_langulo_display("g(5)"), "10");
     }
 
     /////////////
@@ -544,93 +611,110 @@ mod tests {
 
     #[test]
     fn test_string_simple() {
-        assert_eq!(eval_langulo_display(r#""hello""#), "'hello'");
-        assert_eq!(eval_langulo_display(r#"'hello'"#), "'hello'");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display(r#""hello""#), "hello");
+        assert_eq!(ctx.eval_langulo_display(r#"'hello'"#), "hello");
     }
 
     #[test]
     fn test_string_concatenation() {
+        let ctx = TestContext::new();
         assert_eq!(
-            eval_langulo_display(r#""hello" + " world""#),
-            "'hello world'"
+            ctx.eval_langulo_display(r#""hello" + " world""#),
+            "hello world"
         );
     }
 
     #[test]
     fn test_string_interpolation_var() {
-        assert_eq!(eval_langulo_display(r#"name = "Alice""#), "'Alice'");
-        assert_eq!(eval_langulo_display(r#""hello {name}""#), "'hello Alice'");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display(r#"name = "Alice""#), "Alice");
+        assert_eq!(
+            ctx.eval_langulo_display(r#""hello {name}""#),
+            "hello Alice"
+        );
     }
 
     #[test]
     fn test_string_interpolation_expr() {
-        assert_eq!(eval_langulo_display(r#""2 + 2 = {2 + 2}""#), "'2 + 2 = 4'");
+        let ctx = TestContext::new();
+        assert_eq!(
+            ctx.eval_langulo_display(r#""2 + 2 = {2 + 2}""#),
+            "2 + 2 = 4"
+        );
     }
 
     #[test]
     fn test_string_interpolation_multiple() {
-        assert_eq!(eval_langulo_display(r#"a = 1"#), "1");
-        assert_eq!(eval_langulo_display(r#"b = 2"#), "2");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display(r#"a = 1"#), "1");
+        assert_eq!(ctx.eval_langulo_display(r#"b = 2"#), "2");
         assert_eq!(
-            eval_langulo_display(r#""{a} + {b} = {a + b}""#),
-            "'1 + 2 = 3'"
+            ctx.eval_langulo_display(r#""{a} + {b} = {a + b}""#),
+            "1 + 2 = 3"
         );
     }
 
     #[test]
     fn test_string_nested_quotes() {
+        let ctx = TestContext::new();
         assert_eq!(
-            eval_langulo_display(r#""hello {'world'}""#),
-            "'hello world'"
+            ctx.eval_langulo_display(r#""hello {'world'}""#),
+            "hello world"
         );
     }
 
     #[test]
     fn test_string_interpolation_nested_string() {
-        setup();
-        assert_eq!(eval_langulo_display(r#"x = 'inner'"#), "'inner'");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display(r#"x = 'inner'"#), "inner");
         assert_eq!(
-            eval_langulo_display(r#""outer {x} end""#),
-            "'outer inner end'"
+            ctx.eval_langulo_display(r#""outer {x} end""#),
+            "outer inner end"
         );
     }
 
     #[test]
     fn test_multiline_string() {
+        let ctx = TestContext::new();
         assert_eq!(
-            eval_langulo_display(
+            ctx.eval_langulo_display(
                 r#""""hello
 world""""#
             ),
-            "'hello\nworld'"
+            "hello\nworld"
         );
     }
 
     #[test]
     fn test_string_escape() {
+        let ctx = TestContext::new();
         assert_eq!(
-            eval_langulo_display(r#""hello \"world\"""#),
-            r#"'hello "world"'"#
+            ctx.eval_langulo_display(r#""hello \"world\"""#),
+            r#"hello "world""#
         );
     }
 
     #[test]
     fn test_string_escape_single() {
+        let ctx = TestContext::new();
         assert_eq!(
-            eval_langulo_display(r#"'hello \'world\''"#),
+            ctx.eval_langulo_display(r#"'hello \'world\''"#),
             "hello 'world'"
         );
     }
 
     #[test]
     fn test_empty_string() {
-        assert_eq!(eval_langulo_display(r#""""#), "''");
-        assert_eq!(eval_langulo_display(r#"''"#), "''");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display(r#""""#), "");
+        assert_eq!(ctx.eval_langulo_display(r#"''"#), "");
     }
 
     #[test]
     fn test_string_only_interpolation() {
-        assert_eq!(eval_langulo_display(r#"x = 42"#), "42");
-        assert_eq!(eval_langulo_display(r#""{x}""#), "'42'");
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display(r#"x = 42"#), "42");
+        assert_eq!(ctx.eval_langulo_display(r#""{x}""#), "42");
     }
 }

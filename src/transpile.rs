@@ -8,7 +8,7 @@ const HIDDEN_VARIABLE_PREFIX: &'static str = "h";
 const USER_LITERAL_PREFIX: &'static str = "uu"; // double to avoid hitting potential reserved keywords
 const USER_AT_VAR: &'static str = "ua";
 
-pub fn transpile(ast: &LanguloSyntaxNode, source: &str) -> LanguloResult<String> {
+pub fn transpile(ast: &LanguloSyntaxNode, source: &str) -> LanguloResult<Vec<String>> {
     let mut transpiler = Transpiler::new(source);
     transpiler.visit(ast)?;
     transpiler.finish()
@@ -22,13 +22,13 @@ enum HelperFunction {
 }
 
 impl HelperFunction {
-    fn definition(&self) -> &'static str {
+    fn definition(&self) -> String {
         match self {
             HelperFunction::Print => "def _print(x):\n    print(x)\n    return x",
             HelperFunction::Return => {
                 "class _Return(Exception):\n    def __init__(self, v): self.value = v"
             }
-        }
+        }.into()
     }
 }
 
@@ -193,7 +193,7 @@ impl PythonEmitter {
     }
 
     /// emits the complete python code
-    fn finish(mut self) -> LanguloResult<String> {
+    fn finish(mut self) -> LanguloResult<Vec<String>> {
         if self.scopes.len() != 1 {
             return Err(LanguloError::InternalError {
                 _message: "Tried to finish emitter with unbalanced scopes".to_string(),
@@ -214,16 +214,16 @@ impl PythonEmitter {
             scope.current_line.clear();
         }
 
-        let mut output = String::new();
+        let mut result = vec![];
 
         for helper in self.helpers {
-            output.push_str(helper.definition());
-            output.push_str("\n\n");
+            result.push(helper.definition());
+        }
+        for line in scope.lines {
+            result.push(line);
         }
 
-        output.push_str(&scope.lines.join("\n"));
-
-        Ok(output)
+        Ok(result)
     }
 }
 
@@ -242,7 +242,7 @@ impl Transpiler {
         }
     }
 
-    fn finish(self) -> LanguloResult<String> {
+    fn finish(self) -> LanguloResult<Vec<String>> {
         self.emitter.finish()
     }
 
@@ -299,6 +299,8 @@ impl Transpiler {
         if should_print {
             self.emitter.require_helper(HelperFunction::Print);
             let tmp = self.emitter.fresh_hidden_var();
+            // the lines below are emitted in a scope because it needs to be treated as a single statement
+            self.emitter.push_scope();
             self.emitter
                 .add_full_line_before_current(&format!("if not '{}' in vars():", target))?;
             self.emitter.increase_indentation();
@@ -308,6 +310,7 @@ impl Transpiler {
                 node.text().to_string()
             ))?;
             self.emitter.decrease_indentation()?;
+            self.emitter.pop_scope()?;
             self.emitter
                 .add_full_line_before_current(&format!("{} = {}", tmp, target))?;
             self.emitter.print(&tmp)?;
@@ -490,6 +493,7 @@ impl Transpiler {
                 self.emitter.require_helper(HelperFunction::Return);
                 self.is_in_block = true;
 
+                self.emitter.push_scope();
                 // block is translated to a try/catch, you raise a returnException out of the scope
                 let result_var = self.emitter.fresh_hidden_var();
                 self.emitter.add_full_line_before_current("try:")?;
@@ -519,6 +523,7 @@ impl Transpiler {
                     .add_full_line_before_current(&format!("{} = _r.value", result_var))?;
                 self.emitter.decrease_indentation()?;
 
+                self.end_scope()?;
                 self.emitter.grow_current_line_with(&result_var)?;
                 self.is_in_block = false;
             }
@@ -613,13 +618,13 @@ impl Transpiler {
             .map(|child| Self::literal_to_var(&child))
             .collect();
 
+        self.emitter.push_scope();
         let fn_name = self.emitter.fresh_hidden_var();
         self.emitter.add_full_line_before_current(&format!(
             "def {}({}):",
             fn_name,
             params.join(", ")
         ))?;
-        self.emitter.push_scope();
         self.emitter.increase_indentation();
 
         let body_expr = body_node.first_child().ok_or(LanguloError::InternalError {
@@ -639,9 +644,7 @@ impl Transpiler {
 
     fn end_scope(&mut self) -> LanguloResult<()> {
         let scope = self.emitter.pop_scope()?;
-        for line in scope.lines {
-            self.emitter.current_scope_mut()?.lines.push(line);
-        }
+        self.emitter.current_scope_mut()?.lines.push(scope.lines.join("\n"));
         Ok(())
     }
 
@@ -697,7 +700,7 @@ mod tests {
 
     fn transpile_source(source: &str) -> String {
         let ast = parse(source).unwrap();
-        let result = transpile(&ast, source).unwrap();
+        let result = transpile(&ast, source).unwrap().join("\n");
         println!("{}", result);
         result
     }

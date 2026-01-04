@@ -130,16 +130,17 @@ unless it encounters a return expression. in that case, it evaluates to the retu
 // standard definition
 add = |n, m| n + m
 
-// postfix definition
-plus = |@, other| @ + other
-
 //standard usage
 five = add(2, 3)
 
-// postfix usage
-five = 2 @ plus 3
+// you can mark a particular argument of a function as `@`
+plus = |@, other| @ + other
 
-// postfix definition makes it easier to chain multiple functions
+// a function with an `@` argument can also be called with this infix syntax
+five = 2 @ plus 3
+five = plus(2, 3) // this syntax is still supported
+
+// the infix syntax makes it easier to chain multiple functions
 nine = 2\
     plus(3)\
     plus(4)
@@ -164,6 +165,7 @@ values:
     string"""
 operations: 
     + (concatenation)
+    * (repeat)
 -//
 "hello" + " world"
 
@@ -181,46 +183,66 @@ plus
 // an option is an explicit way to indicate that a value could be missing
 some_num = 2!
 no_num = ?
-// arrays aren't implemented yet but array indexing will also return an option
-// [1, 2, 3][0] // 1!
-// [1, 2, 3][4] // ?
 
-// if <cond>: <expr> -> "?" if condition was false, otherwise "expr!"
+// if <cond>: <expr> -> gives an empty option on a false conditions. 
+// otherwise, evaluates <expr> and wraps it into an option.
 if false: 1 // ?, with lazy evaluation of the body
 if true: 2 // 2!
 
-// <option> else <expr> -> inner if option was "inner!", otherwise "expr" 
+// <option> else <expr> -> if the left operand is a full option, evaluates to its unwrapped value.
+// if instead it was an empty option, evaluates to whatever <expr> evaluates to.
+if false: 
 2! else 3 // 2
 ? else 4 // 4
-// note that streaked together, if <cond>: <expr1> else <expr2> behaves like expected
+// note that, streaked together, if <cond>: <expr1> else <expr2> behaves like expected
+
+// some more examples of option usage:
+map = |@, fn| if ask @: fn(@ else 0)
+map_or = |@, fn, default| @ @map(fn) else default
+
+3! @map(|n| "some({n})") // --> "some(3)"!
+?  @map_or(|n| "some({n})", "none") // --> "none"
 ```
 
 # NOT ADDED AND DESIGN IS NOT SET
 
-## ASSOCIATIONS
-
-solid: default value, returning an option of the key
-
-don't like: grouping together list and set, list in particular doesn't sound smart because to keep ordering 
-it needs sorteddict 
-
+## MAPS
 
 ```
-association = [0: "hi", 1: "hello", _: "default"]
-association[1] // --> "hi"?
-association[999] // --> "default"?
-association[1] = "howdy" // --> [0: "hi", 1: "howdy", _: "default"]
-association[_] = "new default" // --> [0: "hi", 1: "howdy", _: "new default"]
-pop association[1]
+// a map is a collection of key-value pairs.
+map = [0: 1, 1: 2, 2: 3]
 
-//shorthand definitions
-list_like = list["hi", "hello"] // [0: "hi", 1: "hello"]
-range_like = 3..6 // [0: 3, 1: 4, 2: 5]
+// you can also declare a map with multiple shorthands
+map = set[1, 2, 3] // [1: true, 2: true, 3: true]
+map = list[1, 2, 3] // [0: 1, 1: 2, 2: 3]
+map = 1..4 // equivalent to the above
 
-set_like = set["hi", "hello"] // ["hi": true, "hello": true]
-in = |@, set| set[@] else false
-"hi" in set_like // --> true
-"howdy" in set_like // --> false
-// alternatively, contains = |@, key| @[key] else false
-// set_like contains "howdy" --> false
+// supported operations:
+
+// indexing: map[key] -> option<value>
+map[1] // 2!
+map[4] // ?
+
+// assignment: map[key] = value -> updates the map and evaluates to value
+map[10] = 4 // map is now [0: 1, 1: 2, 2: 3, 10: 4]
+
+// deletion: del map[key] -> removes the key/value pair from the map (if any) and evaluates to the removed value (if any)
+del map[1] // 2! and map is now [0: 1, 2: 3, 10: 4]
+del map[4] // ? and map is unchanged
+
+-// 
+iter: map iter {
+    <body>
+}
+inside the iter body, you have access to 3 variables: the key, the value, and the index. the iter expression is similar
+to a grouping expression in that it evaluates to the last evaluated expression, or the first return expression encountered.
+//-
+
+map iter {
+    $" #{index} {key}->{value}"
+}
+
+// prints "#0 0->1 
+// prints #1 2->3
+// prints, and evaluates to, #2 10->4"
 ```

@@ -821,10 +821,7 @@ world""""#
     #[test]
     fn test_map_option_bug() {
         let ctx = TestContext::new();
-        assert_eq!(
-            ctx.eval_langulo_display("map = |@, fn| if @: fn(@ else ?)"),
-            "<function>"
-        );
+        assert_eq!(ctx.eval_langulo_display("map = |@, fn| if ask @: fn(@ else ?)"), "<function>");
         assert_eq!(ctx.eval_langulo_display("5! @ map(|x|x+1)"), "6!");
         assert_eq!(ctx.eval_langulo_display("? @ map(|x|x+1)"), "?");
     }
@@ -855,4 +852,208 @@ world""""#
             "<function>"
         )
     }
+
+    #[test]
+    fn test_empty_map() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("[]"), "{}");
+    }
+
+    #[test]
+    fn test_map_literal() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("[1: 2, 3: 4]"), "{1: 2, 3: 4}");
+    }
+
+    #[test]
+    fn test_set_literal() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("set[1, 2]"), "{1: True, 2: True}");
+    }
+
+    #[test]
+    fn test_list_literal() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("list[10, 20]"), "{0: 10, 1: 20}");
+    }
+
+    #[test]
+    fn test_range() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("1..4"), "{1: 1, 2: 2, 3: 3}");
+    }
+
+    #[test]
+    fn test_map_index_found() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = [1: 42]"), "{1: 42}");
+        assert_eq!(ctx.eval_langulo_display("m[1]"), "42!");
+    }
+
+    #[test]
+    fn test_map_index_not_found() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = [1: 42]"), "{1: 42}");
+        assert_eq!(ctx.eval_langulo_display("m[99]"), "?");
+    }
+
+    #[test]
+    fn test_map_index_assignment() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = []"), "{}");
+        assert_eq!(ctx.eval_langulo_display("m[1] = 42"), "42");
+        assert_eq!(ctx.eval_langulo_display("m"), "{1: 42}");
+    }
+
+    #[test]
+    fn test_map_index_else() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = [1: 42]"), "{1: 42}");
+        assert_eq!(ctx.eval_langulo_display("m[1] else 0"), "42");
+        assert_eq!(ctx.eval_langulo_display("m[99] else 0"), "0");
+    }
+
+    #[test]
+    fn test_matrix_indexing() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = list[list[1, 2], list[3, 4]]"), "{0: {0: 1, 1: 2}, 1: {0: 3, 1: 4}}");
+        assert_eq!(ctx.eval_langulo_display("(m[0] else 0)[1]"), "2!");
+    }
+
+    #[test]
+    fn assignment_persists() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("x = 0..2"), "{0: 0, 1: 1}");
+        assert_eq!(ctx.eval_langulo_display("x[2] = 99"), "99");
+        assert_eq!(ctx.eval_langulo_display("x"), "{0: 0, 1: 1, 2: 99}");
+    }
+    ///////////
+    // del   //
+    ///////////
+
+    #[test]
+    fn test_del_existing_key() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = [1: 42, 2: 99]"), "{1: 42, 2: 99}");
+        assert_eq!(ctx.eval_langulo_display("del m[1]"), "42!");
+        assert_eq!(ctx.eval_langulo_display("m"), "{2: 99}");
+    }
+
+    #[test]
+    fn test_del_missing_key() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = [1: 42]"), "{1: 42}");
+        assert_eq!(ctx.eval_langulo_display("del m[99]"), "?");
+        assert_eq!(ctx.eval_langulo_display("m"), "{1: 42}");
+    }
+
+    #[test]
+    fn test_del_with_else() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = [1: 42]"), "{1: 42}");
+        assert_eq!(ctx.eval_langulo_display("del m[1] else 0"), "42");
+        assert_eq!(ctx.eval_langulo_display("del m[99] else 0"), "0");
+    }
+
+    ///////////
+    // iter  //
+    ///////////
+
+    #[test]
+    fn test_iter_simple() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = [1: 10, 2: 20]"), "{1: 10, 2: 20}");
+        // Returns last evaluated value (from last iteration)
+        assert_eq!(ctx.eval_langulo_display("m iter { value }"), "20");
+    }
+
+    #[test]
+    fn test_iter_key() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = [1: 10, 2: 20]"), "{1: 10, 2: 20}");
+        assert_eq!(ctx.eval_langulo_display("m iter { key }"), "2");
+    }
+
+    #[test]
+    fn test_iter_index() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = [1: 10, 2: 20]"), "{1: 10, 2: 20}");
+        assert_eq!(ctx.eval_langulo_display("m iter { index }"), "1");
+    }
+
+    #[test]
+    fn test_iter_with_expression() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = [1: 10, 2: 20]"), "{1: 10, 2: 20}");
+        assert_eq!(ctx.eval_langulo_display("m iter { key + value }"), "22");
+    }
+
+    #[test]
+    fn test_iter_with_print() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = [1: 10, 2: 20]"), "{1: 10, 2: 20}");
+        // This should print "10" then "20", and return "20"
+        assert_eq!(ctx.eval_langulo_display("m iter { $value }"), "20");
+    }
+
+    #[test]
+    fn test_iter_with_return() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = [1: 10, 2: 20, 3: 30]"), "{1: 10, 2: 20, 3: 30}");
+        // Return early when value > 15
+        assert_eq!(ctx.eval_langulo_display("m iter { if (value > 15): return value }"), "20");
+    }
+
+    #[test]
+    fn test_iter_empty_map() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = []"), "{}");
+        // Empty map iteration returns None
+        assert_eq!(ctx.eval_langulo_display("m iter { value }"), "None");
+    }
+
+    #[test]
+    fn test_iter_with_assignment() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = [1: 10, 2: 20]"), "{1: 10, 2: 20}");
+        assert_eq!(ctx.eval_langulo_display("sum = 0"), "0");
+        assert_eq!(ctx.eval_langulo_display("m iter { sum = sum + value }"), "30");
+        assert_eq!(ctx.eval_langulo_display("sum"), "30");
+    }
+
+    #[test]
+    fn test_iter_nested() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("m = [1: 10]"), "{1: 10}");
+        assert_eq!(ctx.eval_langulo_display("n = [1: 100]"), "{1: 100}");
+        // Nested iter - inner iter uses its own key/value/index
+        assert_eq!(ctx.eval_langulo_display("m iter { n iter { value } }"), "100");
+    }
+
+    #[test]
+    fn test_range_iter() {
+        let ctx = TestContext::new();
+        // 1..4 creates {1: 1, 2: 2, 3: 3}
+        assert_eq!(ctx.eval_langulo_display("sum = 0"), "0");
+        assert_eq!(ctx.eval_langulo_display("1..4 iter { sum = sum + value }"), "6");
+        assert_eq!(ctx.eval_langulo_display("sum"), "6");
+    }
+
+    #[test]
+    fn test_iter_on_string() {
+        let ctx = TestContext::new();
+        // 1..4 creates {1: 1, 2: 2, 3: 3}
+        assert_eq!(ctx.eval_langulo_display(r#"
+"hello" iter {
+    "value: {value}"
+}"#
+        ), "value: o");
+    }
+
+    #[test]
+    fn test_indexing_on_string() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("\"hi\"[1]"), "i!");
+    }
 }
+

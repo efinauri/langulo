@@ -96,6 +96,28 @@ pub enum Tok<'a> {
     Colon,
     #[regex(r"else")]
     Else(&'a str),
+    #[regex(r"ask")]
+    Ask(&'a str),
+    #[token("[")]
+    LBracket,
+    #[token("]")]
+    RBracket,
+    #[token("..")]
+    DotDot,
+    #[regex(r"del")]
+    Del(&'a str),
+    #[regex(r"iter")]
+    Iter(&'a str),
+    #[regex(r"set")]
+    Set(&'a str),
+    #[regex(r"list")]
+    List(&'a str),
+    #[regex(r"key")]
+    Key(&'a str),
+    #[regex(r"value")]
+    Value(&'a str),
+    #[regex(r"index")]
+    Index(&'a str),
     // just to assert during tests that we matched the entire input
     #[allow(dead_code, non_camel_case_types)]
     __Test_Eof,
@@ -190,7 +212,18 @@ impl Tok<'_> {
             Tok::ExclamationMark => "!",
             Tok::If(_) => "if",
             Tok::Else(_) => "else",
+            Tok::Ask(_) => "ask",
             Tok::Colon => ":",
+            Tok::LBracket => "[",
+            Tok::RBracket => "]",
+            Tok::DotDot => "..",
+            Tok::Del(_) => "del",
+            Tok::Iter(_) => "iter",
+            Tok::Set(_) => "set",
+            Tok::List(_) => "list",
+            Tok::Key(_) => "key",
+            Tok::Value(_) => "value",
+            Tok::Index(_) => "index",
             Tok::LineContinuation(_) => "\\",
             Tok::Newline(_) => "\n",
         }
@@ -223,6 +256,14 @@ impl Tok<'_> {
             | Tok::TrailingBackslash(slice)
             | Tok::If(slice)
             | Tok::Else(slice)
+            | Tok::Ask(slice)
+            | Tok::Del(slice)
+            | Tok::Iter(slice)
+            | Tok::Set(slice)
+            | Tok::List(slice)
+            | Tok::Key(slice)
+            | Tok::Value(slice)
+            | Tok::Index(slice)
             | Tok::Whitespace(slice) => slice.len(),
 
             Tok::Plus
@@ -244,6 +285,9 @@ impl Tok<'_> {
             | Tok::QuestionMark
             | Tok::ExclamationMark
             | Tok::Colon
+            | Tok::DotDot
+            | Tok::LBracket
+            | Tok::RBracket
             | Tok::At => 1,
             Tok::__Test_Eof => 0,
         }
@@ -508,6 +552,9 @@ world"#,
 
     #[test]
     fn test_fn_application_without_spaces() {
-        expect_tokens("3@fn()", &[Num("3"), At, Literal("fn"), LParen, RParen, __Test_Eof]);
+        expect_tokens(
+            "3@fn()",
+            &[Num("3"), At, Literal("fn"), LParen, RParen, __Test_Eof],
+        );
     }
 }

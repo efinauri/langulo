@@ -138,7 +138,23 @@ pub enum LanguloError {
     AtOutsideFunctionDeclaration {
         #[source_code]
         _src: String,
-        #[label("here")]
+        #[label("outside of a function declaration")]
+        _span: SourceSpan,
+    },
+
+    #[error("`{_var}` can only be used inside an iter body")]
+    IterVarOutsideIter {
+        _var: String,
+        #[source_code]
+        _src: String,
+        #[label("outside of an iter body")]
+        _span: SourceSpan,
+    },
+    #[error("del can only be used with map indexing (e.g., del map[key])")]
+    InvalidDelTarget {
+        #[source_code]
+        _src: String,
+        #[label("expected map[key]")]
         _span: SourceSpan,
     },
 }

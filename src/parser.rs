@@ -37,6 +37,7 @@ pub enum AstNode {
     // unary prefix
     Not,
     Print,
+    Ask,
     // function
     FunctionDecl,
     FunctionParams,
@@ -53,6 +54,15 @@ pub enum AstNode {
     NoOption,
     If,
     Else,
+    ListLit,
+    SetLit,
+    Del,
+    MapIndex,
+    Range,
+    IterVar,
+    MapLit,
+    MapEntry,
+    Iter,
 }
 
 // plumbing for rowan
@@ -80,7 +90,7 @@ impl rowan::Language for Langulo {
 // end of plumbing
 
 impl Tok<'_> {
-    fn precedence_as_infix(&self) -> u8 {
+    fn precedence(&self) -> u8 {
         match self {
             Tok::Num(_)
             | Tok::StringLitSingle(_)
@@ -105,12 +115,22 @@ impl Tok<'_> {
             | Tok::If(_)
             | Tok::QuestionMark
             | Tok::Colon
+            | Tok::Ask(_)
             | Tok::Not(_)
+            | Tok::Del(_)
+            | Tok::Set(_)
+            | Tok::List(_)
+            | Tok::Key(_)
+            | Tok::Value(_)
+            | Tok::Index(_)
+            | Tok::RBracket
             | Tok::__Test_Eof => 0,
 
             Tok::Assign => 0b_0000_0001,
 
-            Tok::Else(_) => 0b_0000_0010,
+            Tok::Else(_) | Tok::Iter(_) => 0b_0000_0010,
+
+            Tok::DotDot => 0b_0000_0011,
 
             Tok::And(_) | Tok::Or(_) | Tok::Xor(_) => 0b_0000_0100,
             Tok::Eq(_) | Tok::Neq(_) => 0b_0000_1000,
@@ -121,7 +141,7 @@ impl Tok<'_> {
             Tok::Caret => 0b_1000_0000,
             Tok::Dollar => 0b_1100_0000,
             Tok::At => 0b_1110_0000,
-            Tok::LParen | Tok::ExclamationMark => 0b_1111_0000, // for fn calls
+            Tok::LParen | Tok::LBracket | Tok::ExclamationMark => 0b_1111_0000, // for fn calls
         }
     }
 }
@@ -175,6 +195,7 @@ pub struct Parser<'src> {
     /// with respect to `self.source`
     current_offset: usize,
     is_in_fn_body: bool,
+    is_in_iter_body: bool,
 }
 
 pub fn parse(source: &str) -> LanguloResult<LanguloSyntaxNode> {
@@ -194,6 +215,7 @@ impl<'src> Parser<'src> {
             ast_builder: Default::default(),
             current_offset: 0,
             is_in_fn_body: false,
+            is_in_iter_body: false,
         }
     }
 
@@ -208,6 +230,11 @@ impl<'src> Parser<'src> {
         match self.lexer.next() {
             Some(Ok(tok)) => {
                 self.current_offset += tok.len();
+                if self.current_offset > self.source.len() {
+                    return Err(LanguloError::InternalError {
+                        _message: format!("offset went outside of source code because of tok {:?}", tok),
+                    })
+                }
                 Ok(tok)
             }
             Some(Err(())) => Err(LanguloError::LexerError {
@@ -260,7 +287,7 @@ impl<'src> Parser<'src> {
 
         loop {
             let next_precedence = match self.peek_meaningful_token()? {
-                Some(tok) => tok.precedence_as_infix(),
+                Some(tok) => tok.precedence(),
                 None => break,
             };
             if next_precedence <= precedence {
@@ -291,8 +318,10 @@ impl<'src> Parser<'src> {
                 }
                 self.add_leaf_node(AstNode::Literal, "@")
             }
-            Tok::Not(_) => self.add_unary_node_prefix(AstNode::Not, tok.precedence_as_infix())?,
-            Tok::Dollar => self.add_unary_node_prefix(AstNode::Print, tok.precedence_as_infix())?,
+            Tok::Not(_) => self.add_unary_node_prefix(AstNode::Not, tok.precedence())?,
+            Tok::Dollar => self.add_unary_node_prefix(AstNode::Print, tok.precedence())?,
+            Tok::Ask(_) => self.add_unary_node_prefix(AstNode::Ask, tok.precedence())?,
+            Tok::Del(_) => self.add_unary_node_prefix(AstNode::Del, tok.precedence())?,
             Tok::LParen => {
                 self.ast_builder.start_node(AstNode::Grouping.into());
                 self.parse_expr(0)?;
@@ -304,26 +333,12 @@ impl<'src> Parser<'src> {
                 // desugar - <expr> into -1 * <expr>
                 self.ast_builder.start_node(AstNode::Multiply.into());
                 self.add_leaf_node(AstNode::Num, "-1");
-                self.parse_expr(Tok::Star.precedence_as_infix())?;
+                self.parse_expr(Tok::Star.precedence())?;
                 self.ast_builder.finish_node();
             }
             Tok::LBrace => {
                 self.ast_builder.start_node(AstNode::Block.into());
-                self.skip_newlines()?;
-                if let Tok::RBrace = self.peek_meaningful_token_or_eof_err()? {
-                    return Err(LanguloError::EmptyBlock {
-                        _src: self.source.into(),
-                        _span: (self.current_offset, 1).into(),
-                    });
-                }
-                loop {
-                    if let Tok::RBrace = self.peek_meaningful_token_or_eof_err()? {
-                        break;
-                    }
-                    self.parse_expr(0)?;
-                    self.skip_newlines()?;
-                }
-                self.consume_required_tok(Tok::RBrace)?;
+                self.parse_braced_exprs()?;
                 self.ast_builder.finish_node();
             }
             Tok::Return(value) => {
@@ -338,8 +353,35 @@ impl<'src> Parser<'src> {
                 self.ast_builder.start_node(AstNode::If.into());
                 self.parse_expr(0)?;
                 self.consume_required_tok(Tok::Colon)?;
-                self.parse_expr(Tok::Else("").precedence_as_infix())?;
+                self.parse_expr(Tok::Else("").precedence())?;
                 self.ast_builder.finish_node();
+            }
+
+            Tok::LBracket => self.parse_map()?,
+
+            Tok::Set(_) => {
+                self.ast_builder.start_node(AstNode::SetLit.into());
+                self.consume_required_tok(Tok::LBracket)?;
+                self.parse_bracket_items()?;
+                self.ast_builder.finish_node();
+            }
+
+            Tok::List(_) => {
+                self.ast_builder.start_node(AstNode::ListLit.into());
+                self.consume_required_tok(Tok::LBracket)?;
+                self.parse_bracket_items()?;
+                self.ast_builder.finish_node();
+            }
+
+            Tok::Key(value) | Tok::Value(value) | Tok::Index(value) => {
+                if !self.is_in_iter_body {
+                    return Err(LanguloError::IterVarOutsideIter {
+                        _src: self.source.into(),
+                        _span: self.span_highlighting_token(&tok),
+                        _var: value.into(),
+                    });
+                }
+                self.add_leaf_node(AstNode::IterVar, value);
             }
 
             _ => {
@@ -351,6 +393,25 @@ impl<'src> Parser<'src> {
                 });
             }
         }
+        Ok(())
+    }
+
+    fn parse_braced_exprs(&mut self) -> LanguloResult<()> {
+        self.skip_newlines()?;
+        if let Tok::RBrace = self.peek_meaningful_token_or_eof_err()? {
+            return Err(LanguloError::EmptyBlock {
+                _src: self.source.into(),
+                _span: (self.current_offset, 1).into(),
+            });
+        }
+        loop {
+            if let Tok::RBrace = self.peek_meaningful_token_or_eof_err()? {
+                break;
+            }
+            self.parse_expr(0)?;
+            self.skip_newlines()?;
+        }
+        self.consume_required_tok(Tok::RBrace)?;
         Ok(())
     }
 
@@ -380,6 +441,11 @@ impl<'src> Parser<'src> {
             Tok::Leq(_) => self.add_binary_node(AstNode::Leq, checkpoint, precedence)?,
             Tok::Assign => self.add_binary_node(AstNode::Assign, checkpoint, precedence)?,
             Tok::Else(_) => self.add_binary_node(AstNode::Else, checkpoint, precedence)?,
+            Tok::DotDot => self.add_binary_node(AstNode::Range, checkpoint, precedence)?,
+            Tok::LBracket => {
+                self.add_binary_node(AstNode::MapIndex, checkpoint, precedence)?;
+                self.consume_required_tok(Tok::RBracket)?;
+            }
 
             Tok::ExclamationMark => self.add_unary_node_infix(AstNode::SomeOption, checkpoint),
 
@@ -389,9 +455,7 @@ impl<'src> Parser<'src> {
                 self.ast_builder
                     .start_node_at(checkpoint, AstNode::Print.into());
                 // make sure that the rest gets parsed with the right precedence, as if printing wasn't being parsed
-                let next_precedence = self
-                    .peek_meaningful_token_or_eof_err()?
-                    .precedence_as_infix();
+                let next_precedence = self.peek_meaningful_token_or_eof_err()?.precedence();
                 self.parse_infix(checkpoint, next_precedence)?;
                 self.ast_builder.finish_node();
             }
@@ -405,6 +469,19 @@ impl<'src> Parser<'src> {
                 self.ast_builder
                     .start_node_at(checkpoint, AstNode::PostfixFnCall.into());
                 self.parse_expr(precedence)?;
+                self.ast_builder.finish_node();
+            }
+            Tok::Iter(_) => {
+                self.ast_builder
+                    .start_node_at(checkpoint, AstNode::Iter.into());
+                self.consume_required_tok(Tok::LBrace)?;
+
+                let was_in_iter = self.is_in_iter_body;
+                self.is_in_iter_body = true;
+
+                self.parse_braced_exprs()?;
+
+                self.is_in_iter_body = was_in_iter;
                 self.ast_builder.finish_node();
             }
             _ => {
@@ -447,7 +524,6 @@ impl<'src> Parser<'src> {
     /// (e.g., the root scope or a block scope) that's being parsed.
     fn skip_newlines(&mut self) -> LanguloResult<()> {
         while let Some(Tok::Newline(slice)) = self.peek_meaningful_token()? {
-            self.current_offset += slice.len();
             self.next_meaningful_token()?;
         }
         Ok(())
@@ -462,6 +538,11 @@ impl<'src> Parser<'src> {
                 | Tok::LineContinuation(slice)
                 | Tok::LineComment(slice) => {
                     self.current_offset += slice.len();
+                    if self.current_offset > self.source.len() {
+                        return Err(LanguloError::InternalError {
+                            _message: format!("offset went outside of source code because of tok {:?}", tok),
+                        })
+                    }
                     self.lexer.next();
                 }
                 _ => break,
@@ -523,17 +604,8 @@ impl<'src> Parser<'src> {
                     });
                 }
             }
-            match self.peek_meaningful_token_or_eof_err()? {
-                Tok::Comma => _ = self.next_meaningful_token()?,
-                Tok::Pipe => break,
-                other => {
-                    return Err(LanguloError::UnexpectedToken {
-                        _token: other.info(),
-                        _expected: "one of '|', '@' or a literal".into(),
-                        _src: self.source.into(),
-                        _span: self.span_highlighting_token(&other),
-                    });
-                }
+            if !self.should_keep_parsing_comma_list(Tok::Pipe)? {
+                break;
             }
         }
 
@@ -651,14 +723,12 @@ impl<'src> Parser<'src> {
 
         // Swap lexers and offset, parse interpolated expr, and restore them
         let outer_lexer = std::mem::replace(&mut self.lexer, inner_lexer);
-        let outer_offset = self.current_offset;
         let outer_is_in_fn_body = self.is_in_fn_body;
         self.current_offset = start; // Keep offset relative to original source for errors
 
         self.parse_expr(0)?;
 
         self.lexer = outer_lexer;
-        self.current_offset = outer_offset;
         self.is_in_fn_body = outer_is_in_fn_body;
 
         self.ast_builder.finish_node();
@@ -671,6 +741,69 @@ impl<'src> Parser<'src> {
         let quoted = format!("{}{}{}", quote, &self.source[start..end], quote);
         self.ast_builder.token(AstNode::StringPart.into(), &quoted);
         self.ast_builder.finish_node();
+    }
+
+    fn parse_map(&mut self) -> LanguloResult<()> {
+        self.ast_builder.start_node(AstNode::MapLit.into());
+        if let Tok::RBracket = self.peek_meaningful_token_or_eof_err()? {
+            self.next_meaningful_token()?;
+            self.ast_builder.finish_node();
+            return Ok(());
+        }
+
+        loop {
+            self.ast_builder.start_node(AstNode::MapEntry.into());
+            self.parse_expr(0)?;
+            self.consume_required_tok(Tok::Colon)?;
+            self.parse_expr(0)?;
+            self.ast_builder.finish_node();
+
+            if !self.should_keep_parsing_comma_list(Tok::RBracket)? {
+                break;
+            };
+        }
+
+        self.consume_required_tok(Tok::RBracket)?;
+        self.ast_builder.finish_node();
+        Ok(())
+    }
+
+    fn should_keep_parsing_comma_list(&mut self, end_token: Tok) -> LanguloResult<bool> {
+        match self.peek_meaningful_token_or_eof_err()? {
+            Tok::Comma => {
+                self.next_meaningful_token()?;
+                Ok(true)
+            }
+            other => {
+                if other == end_token {
+                    Ok(false)
+                } else {
+                    Err(LanguloError::UnexpectedToken {
+                        _token: other.info(),
+                        _expected: format!("one of ',' or '{}'", end_token.info()),
+                        _src: self.source.into(),
+                        _span: self.span_highlighting_token(&other),
+                    })
+                }
+            }
+        }
+    }
+
+    fn parse_bracket_items(&mut self) -> LanguloResult<()> {
+        if let Tok::RBracket = self.peek_meaningful_token_or_eof_err()? {
+            self.next_meaningful_token()?;
+            return Ok(());
+        }
+
+        loop {
+            self.parse_expr(0)?;
+            if !self.should_keep_parsing_comma_list(Tok::RBracket)? {
+                break;
+            }
+        }
+
+        self.consume_required_tok(Tok::RBracket)?;
+        Ok(())
     }
 }
 
@@ -1258,12 +1391,7 @@ mod tests {
     fn test_only_iterpolation() {
         expect_ast(AstExpectation {
             source: r#""{x}""#,
-            nodes: &[
-                Root,
-                StringLit,
-                InterpolationPart,
-                Literal,
-            ],
+            nodes: &[Root, StringLit, InterpolationPart, Literal],
             children: &[&[1, 2]],
             ..Default::default()
         });
@@ -1273,13 +1401,7 @@ mod tests {
     fn test_string_with_interpolation() {
         expect_ast(AstExpectation {
             source: r#""hello {name}""#,
-            nodes: &[
-                Root,
-                StringLit,
-                StringPart,
-                InterpolationPart,
-                Literal,
-            ],
+            nodes: &[Root, StringLit, StringPart, InterpolationPart, Literal],
             children: &[&[1, 2, 3], &[3, 4]],
             ..Default::default()
         });
@@ -1440,5 +1562,124 @@ world""""#,
             children: &[&[1, 2, 8], &[2, 3, 4], &[4, 5], &[5, 6, 7]],
             ..Default::default()
         });
+    }
+
+    #[test]
+    fn test_empty_map() {
+        expect_ast(AstExpectation {
+            source: "[]",
+            nodes: &[Root, MapLit],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_map_literal() {
+        expect_ast(AstExpectation {
+            source: "[1: 2, 3: 4]",
+            nodes: &[Root, MapLit, MapEntry, Num, Num, MapEntry, Num, Num],
+            children: &[&[1, 2, 5], &[2, 3, 4], &[5, 6, 7]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_set_literal() {
+        expect_ast(AstExpectation {
+            source: "set[1, 2, 3]",
+            nodes: &[Root, SetLit, Num, Num, Num],
+            children: &[&[1, 2, 3, 4]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_list_literal() {
+        expect_ast(AstExpectation {
+            source: "list[1, 2, 3]",
+            nodes: &[Root, ListLit, Num, Num, Num],
+            children: &[&[1, 2, 3, 4]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_range() {
+        expect_ast(AstExpectation {
+            source: "1..5",
+            nodes: &[Root, Range, Num, Num],
+            children: &[&[1, 2, 3]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_map_index() {
+        expect_ast(AstExpectation {
+            source: "map[1]",
+            nodes: &[Root, MapIndex, Literal, Num],
+            children: &[&[1, 2, 3]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_map_index_assignment() {
+        expect_ast(AstExpectation {
+            source: "map[1] = 2",
+            nodes: &[Root, Assign, MapIndex, Literal, Num, Num],
+            children: &[&[1, 2, 5], &[2, 3, 4]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_del() {
+        expect_ast(AstExpectation {
+            source: "del map[1]",
+            nodes: &[Root, Del, MapIndex, Literal, Num],
+            children: &[&[1, 2], &[2, 3, 4]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_iter_simple() {
+        expect_ast(AstExpectation {
+            source: "map iter { key }",
+            nodes: &[Root, Iter, Literal, IterVar],
+            children: &[&[1, 2, 3]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_iter_with_all_vars() {
+        expect_ast(AstExpectation {
+            source: "map iter { key + value + index }",
+            nodes: &[Root, Iter, Literal, Add, Add, IterVar, IterVar, IterVar],
+            children: &[&[1, 2, 3], &[3, 4, 7], &[4, 5, 6]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_del_with_else() {
+        // del m[1] else 0 -> (del m[1]) else 0
+        expect_ast(AstExpectation {
+            source: "del m[1] else 0",
+            nodes: &[Root, Else, Del, MapIndex, Literal, Num, Num],
+            children: &[&[1, 2, 6], &[2, 3], &[3, 4, 5]],
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_str_indexing() {
+        expect_ast(AstExpectation {
+            source: "\"hi\"[1]",
+            nodes: &[Root, MapIndex, StringLit, StringPart, Num],
+            ..Default::default()
+        })
     }
 }

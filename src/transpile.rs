@@ -7,6 +7,9 @@ use std::string::ToString;
 const HIDDEN_VARIABLE_PREFIX: &'static str = "h";
 const USER_LITERAL_PREFIX: &'static str = "uu"; // double to avoid hitting potential reserved keywords
 const USER_AT_VAR: &'static str = "ua";
+const ITER_VAL_VAR: &'static str = "iv";
+const ITER_KEY_VAR: &'static str = "ik";
+const ITER_INDEX_VAR: &'static str = "ii";
 
 pub fn transpile(ast: &LanguloSyntaxNode, source: &str) -> LanguloResult<Vec<String>> {
     let mut transpiler = Transpiler::new(source);
@@ -20,6 +23,7 @@ enum HelperFunction {
     Print,
     Return,
     Option,
+    ToIterable,
 }
 
 impl HelperFunction {
@@ -54,6 +58,17 @@ except NameError:
         def __str__(self): return f'{self.value}!'
         def __bool__(self): return True
     _None = type('_None', (), {'__str__': lambda self: '?', '__bool__': lambda self: False})()
+"#
+            }
+            HelperFunction::ToIterable => {
+                r#"
+try:
+    _to_iterable
+except NameError:
+    def _to_iterable(x):
+        if isinstance(x, str):
+            return {i: c for i, c in enumerate(x)}
+        return x
 "#
             }
         }
@@ -285,6 +300,9 @@ impl Transpiler {
 
     fn literal_to_var(node: &LanguloSyntaxNode) -> String {
         match node.text().to_string().as_str() {
+            "index" => ITER_INDEX_VAR.into(),
+            "key" => ITER_KEY_VAR.into(),
+            "value" => ITER_VAL_VAR.into(),
             "@" => USER_AT_VAR.into(),
             other => format!("{}{}", USER_LITERAL_PREFIX, other),
         }
@@ -315,42 +333,110 @@ impl Transpiler {
     /// `$new = 1 // prints ("undefined variable `new`)"`
     /// `$new = 2 // now would correctly print its previously assigned value, 1`
     ///
-    fn get_lvalue_varname(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<String> {
-        let should_print = has_print_marker(node);
-
-        let target = match node.kind() {
-            AstNode::Literal => Ok(Self::literal_to_var(node)),
-            _ => Err(LanguloError::InvalidAssignmentTarget {
-                _src: self.source.clone(),
-                _span: self.node_span(node),
-            }),
-        }?;
-
-        if should_print {
-            self.emitter.require_helper(HelperFunction::Print);
-            let tmp = self.emitter.fresh_hidden_var();
-            // the lines below are emitted in a scope because it needs to be treated as a single statement
-            self.emitter.push_scope();
-            self.emitter
-                .add_full_line_before_current(&format!("if not '{}' in vars():", target))?;
-            self.emitter.increase_indentation();
-            self.emitter.add_full_line_before_current(&format!(
-                "{}='(undefined variable `{}`)'",
-                target,
-                node.text().to_string()
-            ))?;
-            self.emitter.decrease_indentation()?;
-            self.emitter.pop_scope()?;
-            self.emitter
-                .add_full_line_before_current(&format!("{} = {}", tmp, target))?;
-            self.emitter.print(&tmp)?;
+    fn visit_assignment(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<()> {
+        let children: Vec<_> = node.children().collect();
+        if children.len() != 2 {
+            return Err(LanguloError::InternalError {
+                _message: format!(
+                    "Assignment node found to have {} children",
+                    children.len()
+                ),
+            });
         }
 
-        Ok(target)
+        let var_node = &children[0];
+        let val_node = &children[1];
+
+        let should_print = has_print_marker(var_node);
+
+        match var_node.kind() {
+            AstNode::Literal => {
+                let target = Self::literal_to_var(var_node);
+
+                if should_print {
+                    self.emitter.require_helper(HelperFunction::Print);
+                    let tmp = self.emitter.fresh_hidden_var();
+                    // the lines below are emitted in a scope because it needs to be treated as a single statement
+                    self.emitter.push_scope();
+                    self.emitter
+                        .add_full_line_before_current(&format!("if '{}' not in vars():", target))?;
+                    self.emitter.increase_indentation();
+                    self.emitter.add_full_line_before_current(&format!(
+                        "{}='(undefined variable `{}`)'",
+                        target,
+                        var_node.text().to_string()
+                    ))?;
+                    self.emitter.decrease_indentation()?;
+                    self.end_scope()?;
+                    self.emitter
+                        .add_full_line_before_current(&format!("{} = {}", tmp, target))?;
+                    self.emitter.print(&tmp)?;
+                }
+
+                self.emitter.mark_checkpoint()?;
+                self.visit(val_node)?;
+                self.emitter.resolve_checkpoint_to_var(&target)?;
+                self.emitter.grow_current_line_with(&target)?;
+            }
+
+            AstNode::MapIndex => {
+                let index_children: Vec<_> = var_node.children().collect();
+                if index_children.len() != 2 {
+                    return Err(LanguloError::InternalError {
+                        _message: format!(
+                            "MapIndex should have 2 children, found {}",
+                            index_children.len()
+                        ),
+                    });
+                }
+                let map_expr = &index_children[0];
+                let key_expr = &index_children[1];
+
+                self.emitter.mark_checkpoint()?;
+                self.visit(map_expr)?;
+                let map_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
+                self.emitter.mark_checkpoint()?;
+                self.visit(key_expr)?;
+                let key_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
+
+                if should_print {
+                    self.emitter.require_helper(HelperFunction::Print);
+                    self.emitter.require_helper(HelperFunction::Option);
+                    let tmp = self.emitter.fresh_hidden_var();
+                    self.emitter.add_full_line_before_current(&format!(
+                        "{} = _Some({}[{}]) if {} in {} else _None",
+                        tmp, map_var, key_var, key_var, map_var
+                    ))?;
+                    self.emitter.print(&tmp)?;
+                }
+
+                self.emitter.mark_checkpoint()?;
+                self.visit(val_node)?;
+                let val_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
+
+                self.emitter.add_full_line_before_current(&format!(
+                    "{}[{}] = {}",
+                    map_var, key_var, val_var
+                ))?;
+
+                self.emitter.grow_current_line_with(&val_var)?;
+            }
+
+            _ => {
+                return Err(LanguloError::InvalidAssignmentTarget {
+                    _src: self.source.clone(),
+                    _span: self.node_span(var_node),
+                });
+            }
+        }
+
+        Ok(())
     }
 
     fn visit_inner(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<()> {
         match node.kind() {
+
+
             AstNode::SomeOption => {
                 self.emitter.require_helper(HelperFunction::Option);
                 let child = node.first_child().ok_or(LanguloError::InternalError {
@@ -463,6 +549,14 @@ impl Transpiler {
             AstNode::Lt => self.visit_binary(node, " < ")?,
             AstNode::Geq => self.visit_binary(node, " >= ")?,
             AstNode::Leq => self.visit_binary(node, " <= ")?,
+            AstNode::Ask => {
+                let child = node.first_child().ok_or(LanguloError::InternalError {
+                    _message: "ask node should have a child".to_string(),
+                })?;
+                self.emitter.grow_current_line_with("bool(")?;
+                self.visit(&child)?;
+                self.emitter.grow_current_line_with(")")?;
+            }
             AstNode::Grouping => {
                 let child = node.first_child().ok_or(LanguloError::InternalError {
                     _message: "grouping node should have a child".to_string(),
@@ -476,30 +570,8 @@ impl Transpiler {
                     _message: "print nodes should never get visited".to_string(),
                 });
             }
-            AstNode::Assign => {
-                let children: Vec<_> = node.children().collect();
-                if children.len() != 2 {
-                    return Err(LanguloError::InternalError {
-                        _message: format!(
-                            "Assignment node found to have {} children",
-                            children.len()
-                        ),
-                    });
-                }
-
-                let var_node = &children[0];
-                let val_node = &children[1];
-
-                let lvalue = self.get_lvalue_varname(var_node)?;
-
-                self.emitter.mark_checkpoint()?;
-                self.visit(val_node)?;
-                self.emitter.resolve_checkpoint_to_var(&lvalue)?;
-                self.emitter.grow_current_line_with(&lvalue)?;
-            }
-            AstNode::FunctionDecl => {
-                self.visit_function(node)?;
-            }
+            AstNode::Assign => self.visit_assignment(node)?,
+            AstNode::FunctionDecl => self.visit_function(node)?,
             AstNode::FunctionParams | AstNode::FunctionBody => {
                 return Err(LanguloError::InternalError {
                     _message: "FunctionParams/FunctionBody should not be visited directly"
@@ -586,6 +658,7 @@ impl Transpiler {
                     });
                 }
                 self.emitter.require_helper(HelperFunction::Return);
+                let was_in_block = self.is_in_block;
                 self.is_in_block = true;
 
                 self.emitter.push_scope();
@@ -621,7 +694,7 @@ impl Transpiler {
 
                 self.end_scope()?;
                 self.emitter.grow_current_line_with(&result_var)?;
-                self.is_in_block = false;
+                self.is_in_block = was_in_block;
             }
 
             AstNode::Return => {
@@ -690,7 +763,200 @@ impl Transpiler {
                     _message: "StringPart/InterpolationPart should be handled by StringLit"
                         .to_string(),
                 });
+            },
+            AstNode::MapLit => {
+                let entries: Vec<_> = node.children().collect();
+                self.emitter.grow_current_line_with("{")?;
+                for (i, entry) in entries.iter().enumerate() {
+                    if i > 0 {
+                        self.emitter.grow_current_line_with(", ")?;
+                    }
+                    let entry_children: Vec<_> = entry.children().collect();
+                    if entry_children.len() != 2 {
+                        return Err(LanguloError::InternalError {
+                            _message: format!("MapEntry should have 2 children, found {}", entry_children.len()),
+                        });
+                    }
+                    self.visit(&entry_children[0])?;
+                    self.emitter.grow_current_line_with(": ")?;
+                    self.visit(&entry_children[1])?;
+                }
+                self.emitter.grow_current_line_with("}")?;
             }
+
+            AstNode::MapEntry => {
+                return Err(LanguloError::InternalError {
+                    _message: "MapEntry should be handled by MapLit".to_string(),
+                });
+            }
+
+            AstNode::SetLit => {
+                let items: Vec<_> = node.children().collect();
+                self.emitter.grow_current_line_with("{")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        self.emitter.grow_current_line_with(", ")?;
+                    }
+                    self.visit(item)?;
+                    self.emitter.grow_current_line_with(": True")?;
+                }
+                self.emitter.grow_current_line_with("}")?;
+            }
+
+            AstNode::ListLit => {
+                let items: Vec<_> = node.children().collect();
+                self.emitter.grow_current_line_with("{")?;
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        self.emitter.grow_current_line_with(", ")?;
+                    }
+                    self.emitter.grow_current_line_with(&format!("{}: ", i))?;
+                    self.visit(item)?;
+                }
+                self.emitter.grow_current_line_with("}")?;
+            }
+
+            AstNode::Range => {
+                let children: Vec<_> = node.children().collect();
+                if children.len() != 2 {
+                    return Err(LanguloError::InternalError {
+                        _message: format!("Range should have 2 children, found {}", children.len()),
+                    });
+                }
+                self.emitter.grow_current_line_with("{")?;
+                self.emitter.grow_current_line_with("i: i for i in range(")?;
+                self.visit(&children[0])?;
+                self.emitter.grow_current_line_with(", ")?;
+                self.visit(&children[1])?;
+                self.emitter.grow_current_line_with(")}")?;
+            }
+
+            AstNode::MapIndex => {
+                self.emitter.require_helper(HelperFunction::Option);
+                self.emitter.require_helper(HelperFunction::ToIterable);
+                let children: Vec<_> = node.children().collect();
+                if children.len() != 2 {
+                    return Err(LanguloError::InternalError {
+                        _message: format!("MapIndex should have 2 children, found {}", children.len()),
+                    });
+                }
+                let map_expr = &children[0];
+                let key_expr = &children[1];
+
+                self.emitter.mark_checkpoint()?;
+                self.visit(map_expr)?;
+                let uniterable_map_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
+                let map_var = self.emitter.fresh_hidden_var();
+                self.emitter.add_full_line_before_current(&format!(
+                    "{} = _to_iterable({})", map_var, uniterable_map_var
+                ))?;
+
+                self.emitter.mark_checkpoint()?;
+                self.visit(key_expr)?;
+                let key_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
+
+                self.emitter.grow_current_line_with(&format!(
+                    "(_Some({}[{}]) if {} in {} else _None)",
+                    map_var, key_var, key_var, map_var
+                ))?;
+            }
+
+            AstNode::Del => {
+                self.emitter.require_helper(HelperFunction::Option);
+
+                let child = node.first_child().ok_or(LanguloError::InternalError {
+                    _message: "Del node should have a child".to_string(),
+                })?;
+
+                if child.kind() != AstNode::MapIndex {
+                    return Err(LanguloError::InvalidDelTarget {
+                        _src: self.source.clone(),
+                        _span: self.node_span(&child),
+                    });
+                }
+
+                let index_children: Vec<_> = child.children().collect();
+                if index_children.len() != 2 {
+                    return Err(LanguloError::InternalError {
+                        _message: format!("MapIndex should have 2 children, found {}", index_children.len()),
+                    });
+                }
+                let map_expr = &index_children[0];
+                let key_expr = &index_children[1];
+
+                self.emitter.mark_checkpoint()?;
+                self.visit(map_expr)?;
+                let map_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
+
+                self.emitter.mark_checkpoint()?;
+                self.visit(key_expr)?;
+                let key_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
+
+                let result_var = self.emitter.fresh_hidden_var();
+                self.emitter.add_full_line_before_current(&format!(
+                    "{} = _Some({}.pop({})) if {} in {} else _None",
+                    result_var, map_var, key_var, key_var, map_var
+                ))?;
+
+                self.emitter.grow_current_line_with(&result_var)?;
+            }
+            AstNode::Iter => {
+                self.emitter.require_helper(HelperFunction::Return);
+                self.emitter.require_helper(HelperFunction::ToIterable);
+                let was_in_block = self.is_in_block;
+                self.is_in_block = true;
+
+                let children: Vec<_> = node.children().collect();
+                if children.len() < 2 {
+                    return Err(LanguloError::InternalError {
+                        _message: format!("Iter node should have at least 2 children (map + body expressions), found {}", children.len()),
+                    });
+                }
+
+                let map_expr = &children[0];
+                let body_exprs = &children[1..];
+
+                self.emitter.mark_checkpoint()?;
+                self.visit(map_expr)?;
+                let uniterable_map_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
+                let map_var = self.emitter.fresh_hidden_var();
+                self.emitter.add_full_line_before_current(&format!(
+                    "{} = _to_iterable({})", map_var, uniterable_map_var
+                ))?;
+
+                let result_var = self.emitter.fresh_hidden_var();
+
+                self.emitter.push_scope();
+                self.emitter.add_full_line_before_current(&format!("{} = None", result_var))?;
+                self.emitter.add_full_line_before_current("try:")?;
+                self.emitter.increase_indentation();
+                self.emitter.add_full_line_before_current(&format!(
+                    "for {ITER_INDEX_VAR}, ({ITER_KEY_VAR}, {ITER_VAL_VAR}) in enumerate({map_var}.items()):",
+                ))?;
+                self.emitter.increase_indentation();
+
+                for (i, expr) in body_exprs.iter().enumerate() {
+                    let is_last = i == body_exprs.len() - 1;
+                    self.emitter.mark_checkpoint()?;
+                    self.visit(expr)?;
+                    let var = self.emitter.resolve_checkpoint_to_hidden_var()?;
+                    if is_last {
+                        self.emitter.add_full_line_before_current(&format!("{} = {}", result_var, var))?;
+                    }
+                }
+                self.emitter.decrease_indentation()?;
+                self.emitter.decrease_indentation()?;
+                self.emitter.add_full_line_before_current("except _Return as _r:")?;
+                self.emitter.increase_indentation();
+                self.emitter.add_full_line_before_current(&format!("{} = _r.value", result_var))?;
+                self.emitter.decrease_indentation()?;
+
+                self.end_scope()?;
+                self.emitter.grow_current_line_with(&result_var)?;
+                self.is_in_block = was_in_block;
+            }
+
+            AstNode::IterVar =>self.emitter.grow_current_line_with(Self::literal_to_var(&node).as_str())?,
         }
         Ok(())
     }

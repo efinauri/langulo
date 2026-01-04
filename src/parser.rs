@@ -130,7 +130,7 @@ impl Tok<'_> {
 
             Tok::Else(_) | Tok::Iter(_) => 0b_0000_0010,
 
-            Tok::DotDot => 0b_0000_0011,
+            Tok::DotDot(_) => 0b_0000_0011,
 
             Tok::And(_) | Tok::Or(_) | Tok::Xor(_) => 0b_0000_0100,
             Tok::Eq(_) | Tok::Neq(_) => 0b_0000_1000,
@@ -441,7 +441,7 @@ impl<'src> Parser<'src> {
             Tok::Leq(_) => self.add_binary_node(AstNode::Leq, checkpoint, precedence)?,
             Tok::Assign => self.add_binary_node(AstNode::Assign, checkpoint, precedence)?,
             Tok::Else(_) => self.add_binary_node(AstNode::Else, checkpoint, precedence)?,
-            Tok::DotDot => self.add_binary_node(AstNode::Range, checkpoint, precedence)?,
+            Tok::DotDot(_) => self.add_binary_node(AstNode::Range, checkpoint, precedence)?,
             Tok::LBracket => {
                 self.add_binary_node(AstNode::MapIndex, checkpoint, precedence)?;
                 self.consume_required_tok(Tok::RBracket)?;
@@ -523,7 +523,7 @@ impl<'src> Parser<'src> {
     /// moves the lexer forward to the next statement, if there's any, in the scope
     /// (e.g., the root scope or a block scope) that's being parsed.
     fn skip_newlines(&mut self) -> LanguloResult<()> {
-        while let Some(Tok::Newline(slice)) = self.peek_meaningful_token()? {
+        while let Some(Tok::Newline(_)) = self.peek_meaningful_token()? {
             self.next_meaningful_token()?;
         }
         Ok(())

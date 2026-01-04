@@ -103,7 +103,7 @@ pub enum Tok<'a> {
     #[token("]")]
     RBracket,
     #[token("..")]
-    DotDot,
+    DotDot(&'a str),
     #[regex(r"del")]
     Del(&'a str),
     #[regex(r"iter")]
@@ -216,7 +216,7 @@ impl Tok<'_> {
             Tok::Colon => ":",
             Tok::LBracket => "[",
             Tok::RBracket => "]",
-            Tok::DotDot => "..",
+            Tok::DotDot(_) => "..",
             Tok::Del(_) => "del",
             Tok::Iter(_) => "iter",
             Tok::Set(_) => "set",
@@ -258,6 +258,7 @@ impl Tok<'_> {
             | Tok::Else(slice)
             | Tok::Ask(slice)
             | Tok::Del(slice)
+            | Tok::DotDot(slice)
             | Tok::Iter(slice)
             | Tok::Set(slice)
             | Tok::List(slice)
@@ -285,7 +286,6 @@ impl Tok<'_> {
             | Tok::QuestionMark
             | Tok::ExclamationMark
             | Tok::Colon
-            | Tok::DotDot
             | Tok::LBracket
             | Tok::RBracket
             | Tok::At => 1,

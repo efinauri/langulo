@@ -37,7 +37,6 @@ pub enum AstNode {
     // unary prefix
     Not,
     Print,
-    Ask,
     // function
     FunctionDecl,
     FunctionParams,
@@ -106,7 +105,6 @@ impl Tok<'_> {
             | Tok::If(_)
             | Tok::QuestionMark
             | Tok::Colon
-            | Tok::Ask(_)
             | Tok::Not(_)
             | Tok::__Test_Eof => 0,
 
@@ -176,6 +174,7 @@ pub struct Parser<'src> {
     ast_builder: GreenNodeBuilder<'src>,
     /// with respect to `self.source`
     current_offset: usize,
+    is_in_fn_body: bool,
 }
 
 pub fn parse(source: &str) -> LanguloResult<LanguloSyntaxNode> {
@@ -194,6 +193,7 @@ impl<'src> Parser<'src> {
             lexer: Lexer::new(source).peekable(),
             ast_builder: Default::default(),
             current_offset: 0,
+            is_in_fn_body: false,
         }
     }
 
@@ -282,10 +282,17 @@ impl<'src> Parser<'src> {
             Tok::TripleDoubleQuote(value) => self.parse_string_lit(value, "\"\"\"")?,
             Tok::TripleSingleQuote(value) => self.parse_string_lit(value, "'''")?,
             Tok::True(value) | Tok::False(value) => self.add_leaf_node(AstNode::Bool, value),
-            Tok::At => self.add_leaf_node(AstNode::Literal, "@"),
+            Tok::At => {
+                if !self.is_in_fn_body {
+                    return Err(LanguloError::AtOutsideFunctionDeclaration {
+                        _src: self.source.into(),
+                        _span: self.span_highlighting_token(&tok),
+                    });
+                }
+                self.add_leaf_node(AstNode::Literal, "@")
+            }
             Tok::Not(_) => self.add_unary_node_prefix(AstNode::Not, tok.precedence_as_infix())?,
             Tok::Dollar => self.add_unary_node_prefix(AstNode::Print, tok.precedence_as_infix())?,
-            Tok::Ask(_) => self.add_unary_node_prefix(AstNode::Ask, tok.precedence_as_infix())?,
             Tok::LParen => {
                 self.ast_builder.start_node(AstNode::Grouping.into());
                 self.parse_expr(0)?;
@@ -340,7 +347,7 @@ impl<'src> Parser<'src> {
                     _token: tok.info(),
                     _expected: "a prefix operand".into(),
                     _src: self.source.into(),
-                    _span: (self.current_offset, tok.len()).into(),
+                    _span: self.span_highlighting_token(&tok),
                 });
             }
         }
@@ -405,7 +412,7 @@ impl<'src> Parser<'src> {
                     _token: tok.info(),
                     _expected: "an infix operand".into(),
                     _src: self.source.into(),
-                    _span: (self.current_offset, tok.len()).into(),
+                    _span: self.span_highlighting_token(&tok),
                 });
             }
         }
@@ -481,7 +488,7 @@ impl<'src> Parser<'src> {
 
     fn parse_function_declaration(&mut self) -> LanguloResult<()> {
         self.ast_builder.start_node(AstNode::FunctionDecl.into());
-
+        self.is_in_fn_body = true;
         self.parse_function_declaration_params()?;
 
         self.ast_builder.start_node(AstNode::FunctionBody.into());
@@ -489,6 +496,7 @@ impl<'src> Parser<'src> {
         self.ast_builder.finish_node();
 
         self.ast_builder.finish_node();
+        self.is_in_fn_body = false;
         Ok(())
     }
 
@@ -582,33 +590,34 @@ impl<'src> Parser<'src> {
         self.ast_builder.start_node(AstNode::StringLit.into());
         self.ast_builder.token(AstNode::StringLit.into(), value);
 
-        let content = &self.source[content_start..content_end];
-        let bytes = content.as_bytes();
         let mut is_slice_interpolation = false;
-        let mut slice_start = 0;
 
-        let mut i = 0;
-        while i < bytes.len() {
-            let increment = match (bytes[i], is_slice_interpolation) {
+        let mut slice_start = content_start;
+        let mut i = content_start;
+
+        while i < content_end {
+            let increment = match (self.source.as_bytes()[i], is_slice_interpolation) {
                 (b'\\', _) => 2, // skip both \ and the char it's escaping
                 (b'{', false) => {
                     // entering interpolation - flush current string part if any
-                    self.add_string_part(&content[slice_start..i], quote);
+                    if i > slice_start {
+                        self.add_string_part(slice_start, i, quote);
+                    }
                     is_slice_interpolation = true;
-                    slice_start = i + 2; // 2 and not 1 to also skip opening {
+                    slice_start = i + 1;
                     1
                 }
                 (b'}', true) => {
                     // exiting interpolation - flush interpolation part
                     is_slice_interpolation = false;
-                    self.add_interpolation_part(slice_start, i + 1)?;
+                    self.add_interpolation_part(slice_start, i)?;
                     slice_start = i + 1;
                     1
                 }
                 (b'{', true) => {
                     return Err(LanguloError::LBraceInsideStringInterpolation {
                         _src: self.source.into(),
-                        _span: (content_start + slice_start, content_end - slice_start).into(),
+                        _span: (slice_start, i - slice_start).into(),
                     });
                 }
                 _ => 1,
@@ -618,12 +627,14 @@ impl<'src> Parser<'src> {
         if is_slice_interpolation {
             return Err(LanguloError::UnterminatedInterpolation {
                 _src: self.source.into(),
-                _span: (content_start + slice_start, content_end - slice_start).into(),
+                _span: (slice_start, content_end - slice_start).into(),
             });
         }
 
         // add any potential leftover string part
-        self.add_string_part(&content[slice_start..i], quote);
+        if i > slice_start {
+            self.add_string_part(slice_start, i, quote);
+        }
         self.ast_builder.finish_node();
         Ok(())
     }
@@ -641,21 +652,23 @@ impl<'src> Parser<'src> {
         // Swap lexers and offset, parse interpolated expr, and restore them
         let outer_lexer = std::mem::replace(&mut self.lexer, inner_lexer);
         let outer_offset = self.current_offset;
+        let outer_is_in_fn_body = self.is_in_fn_body;
         self.current_offset = start; // Keep offset relative to original source for errors
 
         self.parse_expr(0)?;
 
         self.lexer = outer_lexer;
         self.current_offset = outer_offset;
+        self.is_in_fn_body = outer_is_in_fn_body;
 
         self.ast_builder.finish_node();
         Ok(())
     }
 
-    fn add_string_part(&mut self, content: &str, quote: &str) {
+    fn add_string_part(&mut self, start: usize, end: usize, quote: &str) {
         self.ast_builder.start_node(AstNode::StringPart.into());
         // Store with quote info so transpiler knows how to emit it
-        let quoted = format!("{}{}{}", quote, content, quote);
+        let quoted = format!("{}{}{}", quote, &self.source[start..end], quote);
         self.ast_builder.token(AstNode::StringPart.into(), &quoted);
         self.ast_builder.finish_node();
     }
@@ -1248,12 +1261,10 @@ mod tests {
             nodes: &[
                 Root,
                 StringLit,
-                StringPart,
                 InterpolationPart,
                 Literal,
-                StringPart,
             ],
-            children: &[&[1, 2, 3, 5], &[3, 4]],
+            children: &[&[1, 2]],
             ..Default::default()
         });
     }
@@ -1268,9 +1279,8 @@ mod tests {
                 StringPart,
                 InterpolationPart,
                 Literal,
-                StringPart,
             ],
-            children: &[&[1, 2, 3, 5], &[3, 4]],
+            children: &[&[1, 2, 3], &[3, 4]],
             ..Default::default()
         });
     }
@@ -1307,9 +1317,8 @@ mod tests {
                 Add,
                 Num,
                 Num,
-                StringPart,
             ],
-            children: &[&[1, 2, 3, 7], &[3, 4], &[4, 5, 6]],
+            children: &[&[1, 2, 3], &[3, 4], &[4, 5, 6]],
             ..Default::default()
         });
     }
@@ -1326,9 +1335,8 @@ mod tests {
                 InterpolationPart,
                 StringLit,
                 StringPart,
-                StringPart,
             ],
-            children: &[&[1, 2, 3, 6], &[3, 4], &[4, 5]],
+            children: &[&[1, 2, 3], &[3, 4], &[4, 5]],
             ..Default::default()
         });
     }

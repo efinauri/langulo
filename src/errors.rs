@@ -130,6 +130,17 @@ pub enum LanguloError {
         #[label("here")]
         _span: SourceSpan,
     },
+    #[error("A prefix `@` can only be used when declaring a function")]
+    #[diagnostic(
+        code(langulo::transpile::at_outside_function_declaration),
+        help("If you're invoking a fusion try adding parentheses to unequivocally bind the function argument: `(arg @ fn())`")
+    )]
+    AtOutsideFunctionDeclaration {
+        #[source_code]
+        _src: String,
+        #[label("here")]
+        _span: SourceSpan,
+    },
 }
 
 pub type LanguloResult<T> = Result<T, LanguloError>;

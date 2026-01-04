@@ -96,8 +96,6 @@ pub enum Tok<'a> {
     Colon,
     #[regex(r"else")]
     Else(&'a str),
-    #[regex(r"ask")]
-    Ask(&'a str),
     // just to assert during tests that we matched the entire input
     #[allow(dead_code, non_camel_case_types)]
     __Test_Eof,
@@ -192,7 +190,6 @@ impl Tok<'_> {
             Tok::ExclamationMark => "!",
             Tok::If(_) => "if",
             Tok::Else(_) => "else",
-            Tok::Ask(_) => "ask",
             Tok::Colon => ":",
             Tok::LineContinuation(_) => "\\",
             Tok::Newline(_) => "\n",
@@ -226,7 +223,6 @@ impl Tok<'_> {
             | Tok::TrailingBackslash(slice)
             | Tok::If(slice)
             | Tok::Else(slice)
-            | Tok::Ask(slice)
             | Tok::Whitespace(slice) => slice.len(),
 
             Tok::Plus
@@ -508,5 +504,10 @@ world"#,
                 __Test_Eof,
             ],
         );
+    }
+
+    #[test]
+    fn test_fn_application_without_spaces() {
+        expect_tokens("3@fn()", &[Num("3"), At, Literal("fn"), LParen, RParen, __Test_Eof]);
     }
 }

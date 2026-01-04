@@ -1,4 +1,3 @@
-use std::cmp::max;
 use crate::errors::{LanguloError, LanguloResult};
 use crate::lexer::Tok;
 use crate::lexer::Tok::TrailingBackslash;
@@ -10,6 +9,34 @@ use logos::Logos;
 use miette::{GraphicalReportHandler, GraphicalTheme};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use std::cmp::max;
+use std::process::exit;
+
+const COMMAND_PREFIX: &'static str = "::";
+
+struct ReplCommand {
+    name: &'static str,
+    alias: &'static str,
+    description: &'static str,
+}
+
+const REPL_COMMANDS: &[ReplCommand] = &[
+    ReplCommand {
+        name: "help",
+        alias: "h",
+        description: "Show this help message",
+    },
+    ReplCommand {
+        name: "transpile",
+        alias: "t",
+        description: "Toggle transpiled code display",
+    },
+    ReplCommand {
+        name: "quit",
+        alias: "q",
+        description: "Exit the REPL",
+    },
+];
 
 pub struct Repl {
     show_python: bool,
@@ -60,8 +87,16 @@ impl Repl {
         loop {
             match self.read_complete_input(&mut rl) {
                 Ok(Some(input)) => {
+                    if let Some(cmd) = input.strip_prefix(COMMAND_PREFIX) {
+                        self.handle_command(cmd);
+                        continue;
+                    }
+
                     let _ = rl.add_history_entry(&input);
-                    self.eval_line(&input);
+                    if !self.eval_line(&input) {
+                        println!("{}", "Goodbye!".dimmed());
+                        break;
+                    }
                 }
                 Ok(None) => {
                     continue;
@@ -101,8 +136,7 @@ impl Repl {
             if indent_level <= 0 && !has_continuation {
                 break;
             } // else grow partial user input
-            let continuation_prompt =
-                self.make_continuation_prompt(indent_level);
+            let continuation_prompt = self.make_continuation_prompt(indent_level);
             user_input.push('\n');
             user_input.push_str(&rl.readline(&continuation_prompt)?);
         }
@@ -171,12 +205,12 @@ impl Repl {
         format!("{}{}", dots, indent)
     }
 
-    fn eval_line(&mut self, input: &str) {
+    fn eval_line(&mut self, input: &str) -> bool {
         let ast = match parse(input) {
             Ok(ast) => ast,
             Err(e) => {
                 self.print_error(&e);
-                return;
+                return true;
             }
         };
 
@@ -184,7 +218,7 @@ impl Repl {
             Ok(stmts) => stmts,
             Err(e) => {
                 self.print_error(&e);
-                return;
+                return true;
             }
         };
 
@@ -206,6 +240,43 @@ impl Repl {
             Err(e) => {
                 self.print_error(&e);
             }
+        }
+
+        true
+    }
+
+    fn handle_command(&mut self, cmd: &str) {
+        match cmd {
+            "help"|"h" => {
+                self.print_help();
+            }
+            "transpile"|"t" => {
+                self.show_python = !self.show_python;
+                let status = if self.show_python {
+                    "enabled"
+                } else {
+                    "disabled"
+                };
+                println!("{} {}", "Transpiled code display".cyan(), status.yellow());
+            }
+            "quit"|"q" => exit(0),
+            _ => {
+                println!("{} {}{}", "Unknown command:".red(), COMMAND_PREFIX, cmd);
+                println!("Type {}help for available commands", COMMAND_PREFIX);
+            }
+        }
+    }
+
+    fn print_help(&self) {
+        println!("{}", "REPL Commands:".cyan().bold());
+        for cmd in REPL_COMMANDS {
+            println!(
+                "  {}{}  {}  {}",
+                COMMAND_PREFIX,
+                cmd.name.yellow(),
+                format!("({}{})", COMMAND_PREFIX, cmd.alias).dimmed(),
+                cmd.description
+            );
         }
     }
 

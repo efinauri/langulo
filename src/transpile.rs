@@ -463,14 +463,6 @@ impl Transpiler {
             AstNode::Lt => self.visit_binary(node, " < ")?,
             AstNode::Geq => self.visit_binary(node, " >= ")?,
             AstNode::Leq => self.visit_binary(node, " <= ")?,
-            AstNode::Ask => {
-                let child = node.first_child().ok_or(LanguloError::InternalError {
-                    _message: "ask node should have a child".to_string(),
-                })?;
-                self.emitter.grow_current_line_with("bool(")?;
-                self.visit(&child)?;
-                self.emitter.grow_current_line_with(")")?;
-            }
             AstNode::Grouping => {
                 let child = node.first_child().ok_or(LanguloError::InternalError {
                     _message: "grouping node should have a child".to_string(),

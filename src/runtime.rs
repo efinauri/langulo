@@ -629,10 +629,7 @@ mod tests {
     fn test_string_interpolation_var() {
         let ctx = TestContext::new();
         assert_eq!(ctx.eval_langulo_display(r#"name = "Alice""#), "Alice");
-        assert_eq!(
-            ctx.eval_langulo_display(r#""hello {name}""#),
-            "hello Alice"
-        );
+        assert_eq!(ctx.eval_langulo_display(r#""hello {name}""#), "hello Alice");
     }
 
     #[test]
@@ -788,7 +785,10 @@ world""""#
         let ctx = TestContext::new();
         // if false: 1 else if true: 2 else 3
         // -> ? else (if true: 2 else 3) -> 2
-        assert_eq!(ctx.eval_langulo_display("if false: 1 else if true: 2 else 3"), "2");
+        assert_eq!(
+            ctx.eval_langulo_display("if false: 1 else if true: 2 else 3"),
+            "2"
+        );
     }
 
     #[test]
@@ -821,8 +821,38 @@ world""""#
     #[test]
     fn test_map_option_bug() {
         let ctx = TestContext::new();
-        assert_eq!(ctx.eval_langulo_display("map = |@, fn| if ask @: fn(@ else ?)"), "<function>");
+        assert_eq!(
+            ctx.eval_langulo_display("map = |@, fn| if @: fn(@ else ?)"),
+            "<function>"
+        );
         assert_eq!(ctx.eval_langulo_display("5! @ map(|x|x+1)"), "6!");
         assert_eq!(ctx.eval_langulo_display("? @ map(|x|x+1)"), "?");
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_map_bug() {
+        let ctx = TestContext::new();
+        assert_eq!(
+            ctx.eval_langulo_display("map = |@, fn| fn(@)"),
+            "<function>"
+        );
+        ctx.eval_langulo_display(
+            r#"
+        3\
+            $@map(|x|x+1)\
+
+            $@map(|x|x*2)
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_named_fn_bug() {
+        let ctx = TestContext::new();
+        assert_eq!(
+            ctx.eval_langulo_display("fn = |n| \"test {n}\""),
+            "<function>"
+        )
     }
 }

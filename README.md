@@ -4,18 +4,21 @@
     * [EXPRESSIONS](#expressions)
     * [FUNCTIONS](#functions)
     * [NULLABILITY AND IF/ELSE](#nullability-and-ifelse)
+  * [INSTALLATION](#installation)
 <!-- TOC -->
 
 # LANGULO
 
-Langulo is a toy programming language not meant for serious use.
-It's written in Rust and transpiles to Python.
-
-- dynamically typed;
+Langulo is a toy programming language not meant for serious use. It is:
+- written in Rust
+- MIT licensed
+- transpiled to Python
+- dynamically typed
+- available as a CLI REPL
 
 ## A SMALL TOUR
 
-For a more thorough syntax guide, check the relative [document](docs/SYNTAX.md).
+For a more thorough syntax guide, check the relative [document](docs/SYNTAX.md) (TODO). 
 
 ### EXPRESSIONS
 
@@ -114,3 +117,14 @@ no_num = ?
 [...]
 
 TODO
+
+## INSTALLATION
+
+```bash
+git clone https://github.com/efinauri/langulo.git
+# in alternative, for the development version:
+# git clone -b dev https://github.com/efinauri/langulo.git
+cd langulo
+cargo build --release
+cargo run --release
+```

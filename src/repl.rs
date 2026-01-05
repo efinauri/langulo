@@ -369,11 +369,11 @@ fn color_token(tok: Tok) -> String {
     use colored::*;
     match tok {
         Num(_) | Literal(_) | True(_) | False(_) | StringLitSingle(_) | StringLitDouble(_)
-        | TripleSingleQuote(_) | Key(_) | Value(_) | Index(_) | QuestionMark
+        | TripleSingleQuote(_) | Key(_) | Value(_) | Index(_) | QuestionMark | At
         | TripleDoubleQuote(_) => tok.info().bright_yellow().to_string(),
         Plus | Minus | Star | Slash | Percent | Caret | Eq(_) | Neq(_) | Lt | Gt | Leq(_)
-        | Geq(_) | And(_) | Or(_) | Xor(_) | DotDot(_) | At | Assign | If(_) | Else(_)
-        | Iter(_) => tok.info().bright_red().to_string(),
+        | Geq(_) | And(_) | Or(_) | Xor(_) | DotDot(_) | Assign | If(_) | Else(_) | Dot
+        | Iter(_) | Dot => tok.info().bright_red().to_string(),
         Not(_) | Ask(_) | Dollar | ExclamationMark | Return(_) | Del(_) => {
             tok.info().bright_cyan().to_string()
         }

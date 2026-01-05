@@ -123,6 +123,7 @@ impl Tok<'_> {
             | Tok::Key(_)
             | Tok::Value(_)
             | Tok::Index(_)
+            | Tok::At
             | Tok::RBracket
             | Tok::__Test_Eof => 0,
 
@@ -140,7 +141,7 @@ impl Tok<'_> {
             Tok::Star | Tok::Slash | Tok::Percent => 0b_0010_0000,
             Tok::Caret => 0b_1000_0000,
             Tok::Dollar => 0b_1100_0000,
-            Tok::At => 0b_1110_0000,
+            Tok::Dot => 0b_1110_0000,
             Tok::LParen | Tok::LBracket | Tok::ExclamationMark => 0b_1111_0000, // for fn calls
         }
     }
@@ -465,7 +466,7 @@ impl<'src> Parser<'src> {
                 self.parse_call_args()?;
                 self.ast_builder.finish_node();
             }
-            Tok::At => {
+            Tok::Dot => {
                 self.ast_builder
                     .start_node_at(checkpoint, AstNode::PostfixFnCall.into());
                 self.parse_expr(precedence)?;
@@ -724,11 +725,13 @@ impl<'src> Parser<'src> {
         // Swap lexers and offset, parse interpolated expr, and restore them
         let outer_lexer = std::mem::replace(&mut self.lexer, inner_lexer);
         let outer_is_in_fn_body = self.is_in_fn_body;
+        let outer_offset = self.current_offset;
         self.current_offset = start; // Keep offset relative to original source for errors
 
         self.parse_expr(0)?;
 
         self.lexer = outer_lexer;
+        self.current_offset = outer_offset;
         self.is_in_fn_body = outer_is_in_fn_body;
 
         self.ast_builder.finish_node();
@@ -1140,7 +1143,7 @@ mod tests {
     fn test_postfix_call_simple() {
         // 3 @ plus(2) -> PostfixFnCall(Num(3), PrefixFnCall(plus, CallArgs(2)))
         expect_ast(AstExpectation {
-            source: "3 @ plus(2)",
+            source: "3.plus(2)",
             nodes: &[
                 Root,
                 PostfixFnCall,
@@ -1159,7 +1162,7 @@ mod tests {
     fn test_postfix_call_no_extra_args() {
         // 3 @ double() -> PostfixFnCall(Num(3), PrefixFnCall(double, CallArgs))
         expect_ast(AstExpectation {
-            source: "3 @ double()",
+            source: "3 .double()",
             nodes: &[Root, PostfixFnCall, Num, PrefixFnCall, Literal, CallArgs],
             children: &[&[1, 2, 3], &[3, 4, 5]],
             ..Default::default()
@@ -1170,7 +1173,7 @@ mod tests {
     fn test_postfix_call_chained() {
         // 3 @ plus(2) @ times(4)
         expect_ast(AstExpectation {
-            source: "3 @ plus(2) @ times(4)",
+            source: "3 .plus(2) .times(4)",
             nodes: &[
                 Root,
                 PostfixFnCall,

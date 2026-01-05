@@ -165,6 +165,7 @@ mod tests {
                 _message: format!("Transpile error: {:?}", e),
             })?;
             println!("Transpiled to:\n{:?}", python_code);
+            println!("\n\ncopypastable: \n{}", python_code.join("\n"));
             self.eval_python(&python_code)
         }
 
@@ -422,8 +423,8 @@ mod tests {
     fn postfix_call_simple() {
         let ctx = TestContext::new();
         assert_eq!(ctx.eval_langulo_display("double = |@| @ * 2"), "<function>");
-        assert_eq!(ctx.eval_langulo_display("5 @ double()"), "10");
-        assert_eq!(ctx.eval_langulo_display("3 @ double()"), "6");
+        assert_eq!(ctx.eval_langulo_display("5.double()"), "10");
+        assert_eq!(ctx.eval_langulo_display("3.double()"), "6");
     }
 
     #[test]
@@ -433,8 +434,8 @@ mod tests {
             ctx.eval_langulo_display("plus = |@, n| @ + n"),
             "<function>"
         );
-        assert_eq!(ctx.eval_langulo_display("3 @ plus(2)"), "5");
-        assert_eq!(ctx.eval_langulo_display("10 @ plus(5)"), "15");
+        assert_eq!(ctx.eval_langulo_display("3.plus(2)"), "5");
+        assert_eq!(ctx.eval_langulo_display("10.plus(5)"), "15");
     }
 
     #[test]
@@ -442,9 +443,9 @@ mod tests {
         let ctx = TestContext::new();
         assert_eq!(ctx.eval_langulo_display("inc = |@| @ + 1"), "<function>");
         assert_eq!(ctx.eval_langulo_display("double = |@| @ * 2"), "<function>");
-        assert_eq!(ctx.eval_langulo_display("0 @ inc() @ inc() @ inc()"), "3");
-        assert_eq!(ctx.eval_langulo_display("2 @ double() @ double()"), "8");
-        assert_eq!(ctx.eval_langulo_display("1 @ inc() @ double()"), "4");
+        assert_eq!(ctx.eval_langulo_display("0 .inc().inc().inc()"), "3");
+        assert_eq!(ctx.eval_langulo_display("2 .double().double()"), "8");
+        assert_eq!(ctx.eval_langulo_display("1 .inc().double()"), "4");
     }
 
     #[test]
@@ -453,8 +454,8 @@ mod tests {
         assert_eq!(ctx.eval_langulo_display("add = |a, b| a + b"), "<function>");
         assert_eq!(ctx.eval_langulo_display("inc = |@| @ + 1"), "<function>");
         // Mix prefix and postfix calls
-        assert_eq!(ctx.eval_langulo_display("add(1, 2) @ inc()"), "4");
-        assert_eq!(ctx.eval_langulo_display("5 @ inc() + 10"), "16");
+        assert_eq!(ctx.eval_langulo_display("add(1, 2).inc()"), "4");
+        assert_eq!(ctx.eval_langulo_display("5.inc() + 10"), "16");
     }
 
     #[test]
@@ -509,8 +510,8 @@ mod tests {
             ctx.eval_langulo_display("plus = |@, n| @ + n"),
             "<function>"
         );
-        assert_eq!(ctx.eval_langulo_display("3 @ plus(1 + 1)"), "5");
-        assert_eq!(ctx.eval_langulo_display("(1 + 2) @ plus(3 * 2)"), "9");
+        assert_eq!(ctx.eval_langulo_display("3.plus(1 + 1)"), "5");
+        assert_eq!(ctx.eval_langulo_display("(1 + 2).plus(3 * 2)"), "9");
     }
 
     #[test]
@@ -822,8 +823,8 @@ world""""#
     fn test_map_option_bug() {
         let ctx = TestContext::new();
         assert_eq!(ctx.eval_langulo_display("map = |@, fn| if ask @: fn(@ else ?)"), "<function>");
-        assert_eq!(ctx.eval_langulo_display("5! @ map(|x|x+1)"), "6!");
-        assert_eq!(ctx.eval_langulo_display("? @ map(|x|x+1)"), "?");
+        assert_eq!(ctx.eval_langulo_display("5! .map(|x|x+1)"), "6!");
+        assert_eq!(ctx.eval_langulo_display("? .map(|x|x+1)"), "?");
     }
 
     #[test]
@@ -1054,6 +1055,13 @@ world""""#
     fn test_indexing_on_string() {
         let ctx = TestContext::new();
         assert_eq!(ctx.eval_langulo_display("\"hi\"[1]"), "i!");
+    }
+
+    #[test]
+    fn test_bug() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("map_option = |@, fn| if ask @: fn(@ else 0)"), "<function>");
+        assert_eq!(ctx.eval_langulo_display("print_option = |@| @.map_option(|opt| $'{opt}') else $'none'"), "<function>");
     }
 }
 

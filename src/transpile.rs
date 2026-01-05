@@ -495,12 +495,23 @@ impl Transpiler {
                 self.visit(option)?;
                 let opt_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
 
-                self.emitter.grow_current_line_with(&format!(
-                    "({}.value if isinstance({}, _Some) else ",
-                    opt_var, opt_var
-                ))?;
+                self.emitter.push_scope();
+                let default_fn = self.emitter.fresh_hidden_var();
+                self.emitter
+                    .add_full_line_before_current(&format!("def {}():", default_fn))?;
+                self.emitter.increase_indentation();
+                self.emitter.mark_checkpoint()?;
                 self.visit(default)?;
-                self.emitter.grow_current_line_with(")")?;
+                let default_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
+                self.emitter
+                    .add_full_line_before_current(&format!("return {}", default_var))?;
+                self.emitter.decrease_indentation()?;
+                self.end_scope()?;
+
+                self.emitter.grow_current_line_with(&format!(
+                    "({}.value if isinstance({}, _Some) else {}())",
+                    opt_var, opt_var, default_fn
+                ))?;
             }
             AstNode::Root => {
                 for child in node.children() {
@@ -1187,13 +1198,13 @@ mod tests {
 
     #[test]
     fn test_postfix_call_transpile() {
-        let result = transpile_source("3 @ plus(2)");
+        let result = transpile_source("3 .plus(2)");
         assert!(result.contains("uuplus(3, 2)"));
     }
 
     #[test]
     fn test_postfix_call_no_extra_args() {
-        let result = transpile_source("5 @ double()");
+        let result = transpile_source("5 .double()");
         assert!(result.contains("uudouble(5)"));
     }
 

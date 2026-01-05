@@ -118,6 +118,8 @@ pub enum Tok<'a> {
     Value(&'a str),
     #[regex(r"index")]
     Index(&'a str),
+    #[regex(r"\.")]
+    Dot,
     // just to assert during tests that we matched the entire input
     #[allow(dead_code, non_camel_case_types)]
     __Test_Eof,
@@ -224,6 +226,7 @@ impl Tok<'_> {
             Tok::Key(_) => "key",
             Tok::Value(_) => "value",
             Tok::Index(_) => "index",
+            Tok::Dot => ".",
             Tok::LineContinuation(_) => "\\",
             Tok::Newline(_) => "\n",
         }
@@ -284,6 +287,7 @@ impl Tok<'_> {
             | Tok::Comma
             | Tok::Pipe
             | Tok::QuestionMark
+            | Tok::Dot
             | Tok::ExclamationMark
             | Tok::Colon
             | Tok::LBracket

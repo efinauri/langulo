@@ -4,45 +4,143 @@ use crate::lexer::Tok::TrailingBackslash;
 use crate::parser::parse;
 use crate::runtime::{eval_python, init_python};
 use crate::transpile::transpile;
-use colored::Colorize;
+use colored::{Colorize, CustomColor};
 use logos::Logos;
 use miette::{GraphicalReportHandler, GraphicalTheme};
-use rustyline::completion::Completer;
+use rustyline::completion::{Completer, Pair};
 use rustyline::error::ReadlineError;
 use rustyline::highlight::{CmdKind, Highlighter};
 use rustyline::hint::Hinter;
 use rustyline::history::DefaultHistory;
 use rustyline::validate::Validator;
-use rustyline::{Context, Editor, Helper};
+use rustyline::{CompletionType, Config, Context, Editor, Helper};
 use std::borrow::Cow;
 use std::cmp::max;
 use std::process::exit;
+use std::string::ToString;
 
 const COMMAND_PREFIX: &'static str = "::";
 
 struct ReplCommand {
     name: &'static str,
-    alias: &'static str,
-    description: &'static str,
+    aliases: &'static [&'static str],
+    help_description: fn(&mut Repl) -> String,
+    handler: fn(&mut Repl) -> (),
+}
+
+impl ReplCommand {
+    /// the command prefix isn't taken into account
+    fn matches(&self, input: &str) -> bool {
+        self.name == input || self.aliases.contains(&input)
+    }
+
+    fn display_aliases(&self) -> String {
+        if self.aliases.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "({})",
+                self.aliases
+                    .iter()
+                    .map(|a| format!("{}{}", COMMAND_PREFIX, a))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+    }
 }
 
 const REPL_COMMANDS: &[ReplCommand] = &[
     ReplCommand {
         name: "help",
-        alias: "h",
-        description: "Show this help message",
+        aliases: &["h"],
+        help_description: |_| "Show this help message".to_string(),
+        handler: |repl| {
+            println!("{}", "REPL Commands:".cyan().bold());
+            for cmd in REPL_COMMANDS {
+                println!(
+                    "  {}{}  {}  {}",
+                    COMMAND_PREFIX,
+                    cmd.name.yellow(),
+                    format!("{}", cmd.display_aliases()).dimmed(),
+                    (cmd.help_description)(repl)
+                );
+            }
+        },
     },
     ReplCommand {
-        name: "transpile",
-        alias: "t",
-        description: "Toggle transpiled code display",
+        name: "clear",
+        aliases: &["cls", "c"],
+        help_description: |_| "Clear the screen".to_string(),
+        handler: |_| {
+            print!("\x1B[2J\x1B[1;1H");
+            let _ = std::io::Write::flush(&mut std::io::stdout());
+        },
+    },
+    ReplCommand {
+        name: "showpython",
+        aliases: &["sp", "py"],
+        help_description: |repl| {
+            format!(
+                "Toggle display of generated Python code (currently {})",
+                if repl.show_python {
+                    "enabled".green()
+                } else {
+                    "disabled".red()
+                }
+            )
+        },
+        handler: |repl| {
+            repl.show_python = !repl.show_python;
+            let status = if repl.show_python {
+                "enabled".green()
+            } else {
+                "disabled".red()
+            };
+            println!("{} {}", "Transpiled code display:".cyan(), status);
+        },
     },
     ReplCommand {
         name: "quit",
-        alias: "q",
-        description: "Exit the REPL",
+        aliases: &["q", "exit"],
+        help_description: |_| "Exit the REPL".to_string(),
+        handler: |_| exit(0),
     },
 ];
+
+const COMMAND_INPUTS_SIZE: usize = {
+    let mut tot = 0;
+    let mut i = 0;
+    while i < REPL_COMMANDS.len() {
+        tot += 1;
+        tot += REPL_COMMANDS[i].aliases.len();
+        i += 1;
+    }
+    tot
+};
+
+const fn COMMAND_INPUTS() -> [&'static str; COMMAND_INPUTS_SIZE] {
+    let mut result = [""; COMMAND_INPUTS_SIZE];
+    let mut result_i = 0;
+    let mut i = 0;
+    while i < REPL_COMMANDS.len() {
+        let cmd = &REPL_COMMANDS[i];
+        result[result_i] = cmd.name;
+        result_i += 1;
+        let mut j = 0;
+        while j < cmd.aliases.len() {
+            result[result_i] = cmd.aliases[j];
+            result_i += 1;
+            j += 1;
+        }
+        i += 1;
+    }
+    result
+}
+
+fn find_command(input: &str) -> Option<&'static ReplCommand> {
+    REPL_COMMANDS.iter().find(|cmd| cmd.matches(input))
+}
 
 pub struct Repl {
     show_python: bool,
@@ -66,8 +164,8 @@ impl Repl {
             format!("v{}", env!("CARGO_PKG_VERSION")).dimmed()
         );
         println!(
-            "{}",
-            "Type expressions to evaluate. Ctrl+D to exit.".dimmed()
+            "Type expressions to evaluate. {} for commands.",
+            format!("{}help", COMMAND_PREFIX).cyan()
         );
         if self.show_python {
             println!("{}", "(Showing transpiled Python)".yellow().dimmed());
@@ -80,8 +178,11 @@ impl Repl {
     }
 
     fn repl_loop(&mut self) -> Result<(), ReadlineError> {
-        let h = LanguloHighLighter::default();
-        let mut rl = Editor::new()?;
+        let config = Config::builder()
+            .completion_type(CompletionType::List)
+            .build();
+        let h = LanguloReplHelper::default();
+        let mut rl = Editor::with_config(config)?;
         rl.set_helper(Some(h));
 
         let history_path = std::env::var("HOME")
@@ -95,15 +196,24 @@ impl Repl {
         loop {
             match self.read_complete_input(&mut rl) {
                 Ok(Some(input)) => {
-                    if let Some(cmd) = input.strip_prefix(COMMAND_PREFIX) {
-                        self.handle_command(cmd);
+                    if let Some(cmd_txt) = input.strip_prefix(COMMAND_PREFIX) {
+                        match find_command(cmd_txt) {
+                            Some(cmd) => {
+                                (cmd.handler)(self);
+                            }
+                            None => println!("{}", format!("Unknown command: {}", cmd_txt).red()),
+                        }
                         continue;
                     }
 
                     let _ = rl.add_history_entry(&input);
-                    if !self.eval_line(&input) {
-                        println!("{}", "Goodbye!".dimmed());
-                        break;
+                    if let Err(err) = self.eval_line(&input) {
+                        let mut buf = String::new();
+                        if self.report_handler.render_report(&mut buf, &err).is_ok() {
+                            eprint!("{}", buf);
+                        } else {
+                            eprintln!("{}: {}", "Error".red().bold(), &err);
+                        }
                     }
                 }
                 Ok(None) => {
@@ -133,7 +243,7 @@ impl Repl {
 
     fn read_complete_input(
         &self,
-        rl: &mut Editor<LanguloHighLighter, DefaultHistory>,
+        rl: &mut Editor<LanguloReplHelper, DefaultHistory>,
     ) -> Result<Option<String>, ReadlineError> {
         let prompt = ">>> ".cyan().bold().to_string();
         let mut user_input = rl.readline(&prompt)?;
@@ -162,110 +272,81 @@ impl Repl {
         format!("{}{}", dots, indent)
     }
 
-    fn eval_line(&mut self, input: &str) -> bool {
-        let ast = match parse(input) {
-            Ok(ast) => ast,
-            Err(e) => {
-                self.print_error(&e);
-                return true;
-            }
-        };
-
-        let statements = match transpile(&ast, input) {
-            Ok(stmts) => stmts,
-            Err(e) => {
-                self.print_error(&e);
-                return true;
-            }
-        };
+    fn eval_line(&mut self, input: &str) -> LanguloResult<()> {
+        let ast = parse(input)?;
+        let statements = transpile(&ast, input)?;
 
         if self.show_python {
             for stmt in &statements {
-                println!("{} {}", "→".dimmed(), stmt.yellow());
+                println!("\t{} {}", "→".dimmed(), stmt.yellow());
             }
         }
 
-        match eval_python(&statements) {
-            Ok(result) => {
-                println!(
-                    "{} {} {}",
-                    "=".green(),
-                    result.display.green().bold(),
-                    format!(": {}", result.py_type).dimmed()
-                );
-            }
-            Err(e) => {
-                self.print_error(&e);
-            }
-        }
-
-        true
-    }
-
-    fn handle_command(&mut self, cmd: &str) {
-        match cmd {
-            "help" | "h" => {
-                self.print_help();
-            }
-            "transpile" | "t" => {
-                self.show_python = !self.show_python;
-                let status = if self.show_python {
-                    "enabled"
-                } else {
-                    "disabled"
-                };
-                println!("{} {}", "Transpiled code display".cyan(), status.yellow());
-            }
-            "quit" | "q" => exit(0),
-            _ => {
-                println!("{} {}{}", "Unknown command:".red(), COMMAND_PREFIX, cmd);
-                println!("Type {}help for available commands", COMMAND_PREFIX);
-            }
-        }
-    }
-
-    fn print_help(&self) {
-        println!("{}", "REPL Commands:".cyan().bold());
-        for cmd in REPL_COMMANDS {
-            println!(
-                "  {}{}  {}  {}",
-                COMMAND_PREFIX,
-                cmd.name.yellow(),
-                format!("({}{})", COMMAND_PREFIX, cmd.alias).dimmed(),
-                cmd.description
-            );
-        }
-    }
-
-    fn print_error(&self, error: &LanguloError) {
-        let mut buf = String::new();
-        if self.report_handler.render_report(&mut buf, error).is_ok() {
-            eprint!("{}", buf);
-        } else {
-            eprintln!("{}: {}", "Error".red().bold(), error);
-        }
+        let result = eval_python(&statements)?;
+        println!(
+            "\t{} {} {}",
+            "=>".green(),
+            result.display.green().bold(),
+            format!(": {}", result.py_type).dimmed()
+        );
+        Ok(())
     }
 }
 
 #[derive(Default)]
-struct LanguloHighLighter {
+struct LanguloReplHelper {
     pub is_in_unclosed_string: bool,
 }
 
-impl Hinter for LanguloHighLighter {
+impl Hinter for LanguloReplHelper {
     type Hint = String;
 
-    fn hint(&self, line: &str, pos: usize, ctx: &Context<'_>) -> Option<Self::Hint> {
-        None
+    fn hint(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Option<Self::Hint> {
+        if !line.starts_with(COMMAND_PREFIX) {
+            return None;
+        }
+
+        let partial = &line[..pos];
+
+        COMMAND_INPUTS()
+            .into_iter()
+            .map(|name| format!("{}{}", COMMAND_PREFIX, name))
+            .find(|cmd| cmd.starts_with(partial) && cmd != partial)
+            .map(|cmd| cmd[pos..].to_string())
     }
 }
-impl Validator for LanguloHighLighter {}
-impl Completer for LanguloHighLighter {
-    type Candidate = String;
-}
-impl Helper for LanguloHighLighter {}
+impl Validator for LanguloReplHelper {}
+impl Completer for LanguloReplHelper {
+    type Candidate = Pair;
 
-impl Highlighter for LanguloHighLighter {
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Self::Candidate>)> {
+        if !line.starts_with(COMMAND_PREFIX) {
+            return Ok((0, vec![]));
+        }
+
+        let partial = &line[COMMAND_PREFIX.len()..pos];
+
+        let candidates: Vec<Pair> = COMMAND_INPUTS()
+            .iter()
+            .find(|name| name.starts_with(partial))
+            .map(|name| Pair {
+                display: name.to_string(),
+                replacement: format!("{}{}", COMMAND_PREFIX, name),
+            })
+            .into_iter()
+            .collect();
+
+        Ok((0, candidates))
+    }
+}
+impl Helper for LanguloReplHelper {}
+
+impl Highlighter for LanguloReplHelper {
     fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
         Cow::Owned(colorize_line(line, self.is_in_unclosed_string))
     }
@@ -282,7 +363,7 @@ impl Highlighter for LanguloHighLighter {
         Cow::Owned(hint.dimmed().to_string())
     }
 
-    fn highlight_char(&self, line: &str, pos: usize, kind: CmdKind) -> bool {
+    fn highlight_char(&self, _line: &str, _pos: usize, _kind: CmdKind) -> bool {
         true
     }
 }
@@ -306,7 +387,7 @@ fn colorize_line(line: &str, mut in_string: bool) -> String {
                 flush_lexed(&mut out, &mut buf);
 
                 let d = if c == '"' { "\"\"\"" } else { "'''" };
-                out.push_str(&d.green().to_string());
+                out.push_str(&d.custom_color(CYAN).to_string());
                 chars.next();
                 chars.next();
 
@@ -315,7 +396,7 @@ fn colorize_line(line: &str, mut in_string: bool) -> String {
             } else if c == '"' || c == '\'' {
                 flush_lexed(&mut out, &mut buf);
 
-                out.push_str(&c.to_string().green().to_string());
+                out.push_str(&c.to_string().custom_color(CYAN).to_string());
                 in_string = true;
                 delim = Some(if c == '"' { "\"" } else { "'" });
             } else {
@@ -323,7 +404,7 @@ fn colorize_line(line: &str, mut in_string: bool) -> String {
             }
         } else {
             // ─── Inside string ───
-            out.push_str(&c.to_string().green().to_string());
+            out.push_str(&c.to_string().custom_color(CYAN).to_string());
 
             if let Some(d) = delim {
                 if d.len() == 1 && c.to_string() == d {
@@ -334,8 +415,22 @@ fn colorize_line(line: &str, mut in_string: bool) -> String {
                     && chars.peek() == Some(&d.chars().nth(1).unwrap())
                     && chars.clone().nth(1) == Some(d.chars().nth(0).unwrap())
                 {
-                    out.push_str(&chars.next().unwrap().to_string().green().to_string());
-                    out.push_str(&chars.next().unwrap().to_string().green().to_string());
+                    out.push_str(
+                        &chars
+                            .next()
+                            .unwrap()
+                            .to_string()
+                            .custom_color(CYAN)
+                            .to_string(),
+                    );
+                    out.push_str(
+                        &chars
+                            .next()
+                            .unwrap()
+                            .to_string()
+                            .custom_color(CYAN)
+                            .to_string(),
+                    );
                     in_string = false;
                     delim = None;
                 }
@@ -346,7 +441,6 @@ fn colorize_line(line: &str, mut in_string: bool) -> String {
     flush_lexed(&mut out, &mut buf);
     out
 }
-
 
 fn flush_lexed(out: &mut String, buf: &mut String) {
     if buf.is_empty() {
@@ -363,23 +457,25 @@ fn flush_lexed(out: &mut String, buf: &mut String) {
     buf.clear();
 }
 
-
 fn color_token(tok: Tok) -> String {
     use Tok::*;
     use colored::*;
     match tok {
-        Num(_) | Literal(_) | True(_) | False(_) | StringLitSingle(_) | StringLitDouble(_)
+        Literal(_) => tok.info().custom_color(YELLOW).underline().to_string(),
+        Num(_) | True(_) | False(_) | StringLitSingle(_) | StringLitDouble(_)
         | TripleSingleQuote(_) | Key(_) | Value(_) | Index(_) | QuestionMark | At
-        | TripleDoubleQuote(_) => tok.info().bright_yellow().to_string(),
+        | TripleDoubleQuote(_) => tok.info().custom_color(YELLOW).to_string(),
         Plus | Minus | Star | Slash | Percent | Caret | Eq(_) | Neq(_) | Lt | Gt | Leq(_)
-        | Geq(_) | And(_) | Or(_) | Xor(_) | DotDot(_) | Assign | If(_) | Else(_) | Dot
-        | Iter(_) | Dot => tok.info().bright_red().to_string(),
-        Not(_) | Ask(_) | Dollar | ExclamationMark | Return(_) | Del(_) => {
-            tok.info().bright_cyan().to_string()
-        }
-        Pipe | LParen | RParen | LBrace | RBrace | LBracket | RBracket | Comma | Colon => {
-            tok.info().to_string()
-        }
+        | Geq(_) | And(_) | Or(_) | Xor(_) | DotDot(_) | Assign | If(_) | Else(_) | Iter(_)
+        => tok.info().custom_color(ORANGE).to_string(),
+        Dot => {
+            let mut str = tok.info().custom_color(ORANGE);
+            str.bgcolor = Some(Color::BrightBlack);
+            str.to_string()
+        },
+        Not(_) | Ask(_) | Dollar | ExclamationMark | Return(_) | Del(_) => tok.info().custom_color(RED).to_string(),
+
+        Pipe | LParen | RParen | LBrace | RBrace | LBracket | RBracket | Comma | Colon => tok.info().bold().to_string(),
         Set(txt)
         | List(txt)
         | Whitespace(txt)
@@ -394,7 +490,6 @@ fn color_token(tok: Tok) -> String {
 
 pub struct ReplInputState {
     is_in_unclosed_string: bool,
-    has_continuation: bool,
     indent_level: usize,
     is_partial: bool,
 }
@@ -453,9 +548,45 @@ impl ReplInputState {
         }
         Self {
             is_in_unclosed_string,
-            has_continuation,
             is_partial,
             indent_level: max(indent_level, 0i32) as usize,
         }
     }
 }
+
+#[allow(dead_code)]
+const YELLOW: CustomColor = CustomColor {
+    r: 230,
+    g: 218,
+    b: 41,
+};
+#[allow(dead_code)]
+const CYAN: CustomColor = CustomColor {
+    r: 45,
+    g: 147,
+    b: 221,
+};
+#[allow(dead_code)]
+const GREEN: CustomColor = CustomColor {
+    r: 40,
+    g: 198,
+    b: 65,
+};
+#[allow(dead_code)]
+const RED: CustomColor = CustomColor {
+    r: 211,
+    g: 39,
+    b: 52,
+};
+#[allow(dead_code)]
+const PURPLE: CustomColor = CustomColor {
+    r: 123,
+    g: 83,
+    b: 173,
+};
+#[allow(dead_code)]
+const ORANGE: CustomColor = CustomColor {
+    r: 218,
+    g: 125,
+    b: 34,
+};

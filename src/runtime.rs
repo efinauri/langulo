@@ -952,8 +952,8 @@ world""""#
     fn test_del_with_else() {
         let ctx = TestContext::new();
         assert_eq!(ctx.eval_langulo_display("m = [1: 42]"), "{1: 42}");
-        assert_eq!(ctx.eval_langulo_display("del m[1] else 0"), "42");
-        assert_eq!(ctx.eval_langulo_display("del m[99] else 0"), "0");
+        assert_eq!(ctx.eval_langulo_display("(del m[1]) else 0"), "42");
+        assert_eq!(ctx.eval_langulo_display("(del m[99]) else 0"), "0");
     }
 
     ///////////

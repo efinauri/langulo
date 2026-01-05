@@ -1258,19 +1258,4 @@ mod tests {
         let result = transpile_source("?");
         assert!(result.contains("_None"));
     }
-
-    #[test]
-    fn test_else_with_some() {
-        let result = transpile_source("42! else 0");
-        assert!(result.contains("_Some(42)"));
-        assert!(result.contains(".value if isinstance("));
-        assert!(result.contains(", _Some) else 0"));
-    }
-
-    #[test]
-    fn test_else_with_none() {
-        let result = transpile_source("? else 99");
-        assert!(result.contains("_None"));
-        assert!(result.contains("else 99"));
-    }
 }

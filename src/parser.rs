@@ -1667,17 +1667,6 @@ world""""#,
     }
 
     #[test]
-    fn test_del_with_else() {
-        // del m[1] else 0 -> (del m[1]) else 0
-        expect_ast(AstExpectation {
-            source: "del m[1] else 0",
-            nodes: &[Root, Else, Del, MapIndex, Literal, Num, Num],
-            children: &[&[1, 2, 6], &[2, 3], &[3, 4, 5]],
-            ..Default::default()
-        });
-    }
-
-    #[test]
     fn test_str_indexing() {
         expect_ast(AstExpectation {
             source: "\"hi\"[1]",

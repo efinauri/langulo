@@ -137,13 +137,13 @@ five = add(2, 3)
 plus = |@, other| @ + other
 
 // a function with an `@` argument can also be called with this infix syntax
-five = 2 @ plus 3
+five = 2.plus(3)
 five = plus(2, 3) // this syntax is still supported
 
 // the infix syntax makes it easier to chain multiple functions
 nine = 2\
-    plus(3)\
-    plus(4)
+    .plus(3)\
+    .plus(4)
     
 // if you need a larger function body use a grouping expression
 // | @ | {
@@ -203,8 +203,6 @@ map_or = |@, fn, default| @ @map(fn) else default
 3! @map(|n| "some({n})") // --> "some(3)"!
 ?  @map_or(|n| "some({n})", "none") // --> "none"
 ```
-
-# NOT ADDED AND DESIGN IS NOT SET
 
 ## MAPS
 

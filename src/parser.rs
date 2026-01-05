@@ -140,9 +140,9 @@ impl Tok<'_> {
             Tok::Plus | Tok::Minus => 0b_0001_0000,
             Tok::Star | Tok::Slash | Tok::Percent => 0b_0010_0000,
             Tok::Caret => 0b_1000_0000,
-            Tok::Dollar => 0b_1100_0000,
             Tok::Dot => 0b_1110_0000,
             Tok::LParen | Tok::LBracket | Tok::ExclamationMark => 0b_1111_0000, // for fn calls
+            Tok::Dollar => 0b_1111_1111,
         }
     }
 }

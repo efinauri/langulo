@@ -4,6 +4,7 @@
     * [EXPRESSIONS](#expressions)
     * [FUNCTIONS](#functions)
     * [NULLABILITY AND IF/ELSE](#nullability-and-ifelse)
+    * [MAPS](#maps)
   * [INSTALLATION AND USAGE](#installation-and-usage)
     * [REQUIREMENTS](#requirements)
     * [INSTALL](#install)
@@ -74,6 +75,18 @@ Functions have very light syntax.
 add = |n, m| n + m
 // usage
 add(2, 3)
+
+// need a bigger function body? use a grouping expression
+calculations = | n, m | {
+  n = n + 1
+  m = m * 2
+  n + m
+}
+//- 
+grouping expressions evaluate to either:
+- the first return expression they encounter
+- the last expression they contain
+-//
 ```
 
 > **NOTE**: for printing purposes, the parentheses in the call are 
@@ -115,11 +128,71 @@ The infix `!` operator boxes/wraps an expression in an option. The value `?` rep
 ```
 some_num = 2!
 no_num = ?
+
+// unsafe operations can now return an option instead of panicking
+somelist = list[1, 2, 3]
+somelist[10] // ?
+somelist[0] // 1!
 ```
 
-[...]
+___
 
-TODO
+`if` and `else` are here reinterpreted as operators on options.
+
+- `if<condition>: <body>`: if the condition is satisfied, evaluates its body and wraps the result in an option. Otherwise, evaluates to `?`.
+- `<option> else <body>`: if `<option>` is filled, evaluates to the wrapped value, otherwise falls back to evaluating the body.
+
+```
+hi = 5
+lo = 10
+// malformed range: evaluates to an empty option.
+maybe_range = if hi >= lo: hi - lo
+hi = 15
+// evaluates to `5!` now that the range is properly defined
+maybe_range = if hi >= lo: hi - lo 
+
+somelist = list[1, 2, 3]
+somelist[0] else $"empty list" // evaluates to 1, and does not print anything
+```
+### MAPS
+
+In Langulo, the concept of a collection is very lax. Lists and sets are just convenience constructors
+for a generic key/value map, as opposed to more specialized data structures.
+
+```
+x = [0: "hi", "hello": 1] // maps can be heterogeneous
+list[1, 2] // -> [0: 1, 1: 2]
+set[1, 2] // -> [1: true, 2: true]
+2..5 // -> [0: 2, 1: 3, 2: 4]
+```
+
+___
+
+The main operation you can perform on maps is `iter`. Iter is the only operator that **must** be followed 
+by a grouping expression. This is because in this special grouping, Langulo automatically assigns the current
+`key`, `value`, and iteration `index` to variables with those names.
+
+```
+oldlist = ["three": "four", "one": "two"]
+newlist = []
+oldlist iter { newlist[index] = "{key}/{value}" } 
+//-
+this is still a grouping expression, so it evaluates to the last exectued expression.
+in this case the value is "three/four". why that and not "one/two"?
+because iter always iterates in the sorted order of the map's keys. 
+-//
+
+newlist // {0: 'one/two', 1: 'three/four'}
+
+
+// you can also iter on strings.
+"hello" iter { $"char #{index} is '{value}'" } 
+//-
+char #0 is 'h'
+[...]
+char #4 is 'o'
+-//
+```
 
 ## INSTALLATION AND USAGE
 

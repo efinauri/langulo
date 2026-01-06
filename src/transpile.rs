@@ -985,7 +985,7 @@ impl Transpiler {
                 self.emitter.add_full_line_before_current("try:")?;
                 self.emitter.increase_indentation();
                 self.emitter.add_full_line_before_current(&format!(
-                    "for {ITER_INDEX_VAR}, ({ITER_KEY_VAR}, {ITER_VAL_VAR}) in enumerate({map_var}.items()):",
+                    "for {ITER_INDEX_VAR}, ({ITER_KEY_VAR}, {ITER_VAL_VAR}) in enumerate(sorted({map_var}.items())):",
                 ))?;
                 self.emitter.increase_indentation();
 

@@ -1,0 +1,19 @@
+map = |@, fn| {
+    res = []
+    @ iter { res[key] = fn(value) }
+    res
+}
+
+filter = |@, fn| {
+    res = []
+    @ iter { if fn(value): res[key] = value }
+    res
+}
+
+reduce = |@, acc, fn| @ iter { acc = fn(acc, value) }
+
+// sum of powers of even numbers in the range 0 to 9, printed every step of the way
+$(0..10)\
+    $.filter(|x| x % 2 == 0)\
+    $.map(|x| x ^ 2)\
+    $.reduce(0, |n, m| n + m)

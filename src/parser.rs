@@ -197,6 +197,9 @@ pub struct Parser<'src> {
     current_offset: usize,
     is_in_fn_body: bool,
     is_in_iter_body: bool,
+    /// a flag disallowing the second `$` operator to be matched in an expression such as
+    /// `1$.fn()$.fn()`
+    is_resolving_infix_print: bool,
 }
 
 pub fn parse(source: &str) -> LanguloResult<LanguloSyntaxNode> {
@@ -217,6 +220,7 @@ impl<'src> Parser<'src> {
             current_offset: 0,
             is_in_fn_body: false,
             is_in_iter_body: false,
+            is_resolving_infix_print: false,
         }
     }
 
@@ -288,7 +292,13 @@ impl<'src> Parser<'src> {
 
         loop {
             let next_precedence = match self.peek_meaningful_token()? {
-                Some(tok) => tok.precedence(),
+                Some(tok) => {
+                    if matches!(tok, Tok::Dollar) && self.is_resolving_infix_print {
+                        0
+                    } else {
+                        tok.precedence()
+                    }
+                },
                 None => break,
             };
             if next_precedence <= precedence {
@@ -453,12 +463,14 @@ impl<'src> Parser<'src> {
             Tok::Dollar => {
                 // print operator can also act on infix operators themselves
                 // e.g., 3 +$ 4 prints 7
+                self.is_resolving_infix_print = true;
                 self.ast_builder
                     .start_node_at(checkpoint, AstNode::Print.into());
                 // make sure that the rest gets parsed with the right precedence, as if printing wasn't being parsed
                 let next_precedence = self.peek_meaningful_token_or_eof_err()?.precedence();
                 self.parse_infix(checkpoint, next_precedence)?;
                 self.ast_builder.finish_node();
+                self.is_resolving_infix_print = false;
             }
             Tok::LParen => {
                 self.ast_builder
@@ -827,6 +839,14 @@ mod tests {
         let root = parse(exp.source).unwrap();
         let nodes: Vec<_> = root.descendants().collect();
         let actual_nodes: Vec<_> = nodes.iter().map(|node| node.kind()).collect();
+
+        fn print_tree(node: &LanguloSyntaxNode, indent: usize) {
+            println!("{}{:?} '{}'", "  ".repeat(indent), node.kind(), node.text());
+            for child in node.children() {
+                print_tree(&child, indent + 1);
+            }
+        }
+        print_tree(&root, 0);
 
         assert_eq!(
             actual_nodes, exp.nodes,
@@ -1676,19 +1696,23 @@ world""""#,
     }
 
     #[test]
-    fn test_fizzbuzz_debug() {
-        let source = r#"fizzbuzz = |@| 0..@ iter {
-res = ""
-}"#;
-        let ast = parse(source).unwrap();
+    fn test_chained_printed_fns() {
+        let source = r#"1$.plus_one()$.plus_one()"#;
+        expect_ast(AstExpectation {
+            source,
+            nodes: &[Root, PostfixFnCall, PostfixFnCall, Num, PrefixFnCall, Literal, CallArgs, PrefixFnCall, Literal, CallArgs],
+            print_markers: &[1, 2],
+            ..Default::default()
+        })
+    }
 
-        fn print_tree(node: &LanguloSyntaxNode, indent: usize) {
-            println!("{}{:?} '{}'", "  ".repeat(indent), node.kind(), node.text());
-            for child in node.children() {
-                print_tree(&child, indent + 1);
-            }
-        }
-
-        print_tree(&ast, 0);
+    #[test]
+    fn test_chained_printed_fns2() {
+        let source = r#"1.plus_one().plus_one()"#;
+        expect_ast(AstExpectation {
+            source,
+            nodes: &[Root, PostfixFnCall, PostfixFnCall, Num, PrefixFnCall, Literal, CallArgs, PrefixFnCall, Literal, CallArgs],
+            ..Default::default()
+        })
     }
 }

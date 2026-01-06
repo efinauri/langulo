@@ -1087,5 +1087,23 @@ if ask res: $res else $index
         assert_eq!(ctx.eval_langulo_display("fizzbuzz(18)"), "fizz");
         assert_eq!(ctx.eval_langulo_display("20.fizzbuzz()"), "buzz");
     }
+
+    #[test]
+    fn test_bug3() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("pls = |@|@+1"), "<function>");
+        assert_eq!(ctx.eval_langulo_display("1$.pls()$.pls()"), "3");
+    }
+
+    #[test]
+    fn test_change_list_keys_should_iter_sorted() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display("l = [0: 0]"), "{0: 0}");
+        assert_eq!(ctx.eval_langulo_display("l[3] = 1"), "1");
+        assert_eq!(ctx.eval_langulo_display("l[2] = 2"), "2");
+        assert_eq!(ctx.eval_langulo_display("l iter {value}"), "1");
+
+
+    }
 }
 

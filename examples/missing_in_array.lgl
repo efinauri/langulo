@@ -1,0 +1,12 @@
+//-
+input: an array of numbers from 0 to n, except a specific number i
+output: i
+-//
+
+find_missing = |@| {
+    res = 0
+    @ iter { res = res xor value xor (index + 1) }
+}
+
+list[0, 1, 2, 3, 5, 6] $.find_missing()
+list[9, 7, 6, 5, 4, 3, 2, 1, 0] $.find_missing()

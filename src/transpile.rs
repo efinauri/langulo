@@ -119,6 +119,18 @@ impl PythonEmitter {
         }
     }
 
+    /// Finalizes the current line as a standalone statement.
+    /// Used to separate top-level expressions in Root.
+    fn finalize_statement(&mut self) -> LanguloResult<()> {
+        let indent = self.indentation();
+        let scope = self.current_scope_mut()?;
+        if !scope.current_line.is_empty() {
+            scope.lines.push(format!("{}{}", indent, scope.current_line));
+            scope.current_line.clear();
+        }
+        Ok(())
+    }
+
     fn current_scope_mut(&mut self) -> LanguloResult<&mut Scope> {
         self.scopes.last_mut().ok_or(LanguloError::InternalError {
             _message: "No active scope".to_string(),
@@ -337,10 +349,7 @@ impl Transpiler {
         let children: Vec<_> = node.children().collect();
         if children.len() != 2 {
             return Err(LanguloError::InternalError {
-                _message: format!(
-                    "Assignment node found to have {} children",
-                    children.len()
-                ),
+                _message: format!("Assignment node found to have {} children", children.len()),
             });
         }
 
@@ -435,8 +444,6 @@ impl Transpiler {
 
     fn visit_inner(&mut self, node: &LanguloSyntaxNode) -> LanguloResult<()> {
         match node.kind() {
-
-
             AstNode::SomeOption => {
                 self.emitter.require_helper(HelperFunction::Option);
                 let child = node.first_child().ok_or(LanguloError::InternalError {
@@ -460,22 +467,34 @@ impl Transpiler {
                 }
                 let cond = &children[0];
                 let body = &children[1];
-                // transpile body into a function, which is conditionally called.
+                let result_var = self.emitter.fresh_hidden_var();
+
                 self.emitter.push_scope();
-                let body_var = self.emitter.fresh_hidden_var();
-                self.emitter
-                    .add_full_line_before_current(&format!("def {body_var}():"))?;
+                self.emitter.grow_current_line_with("if ")?;
+                self.visit(cond)?;
+                self.emitter.grow_current_line_with(":")?;
+                self.emitter.finish_current_line()?;
+
                 self.emitter.increase_indentation();
+
                 self.emitter.mark_checkpoint()?;
                 self.visit(body)?;
-                let return_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
-                self.emitter.add_full_line_before_current(&format!("return {}", return_var))?;
-                self.emitter.decrease_indentation()?;
-                self.end_scope()?;
+                let body_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
+                self.emitter.add_full_line_before_current(&format!(
+                    "{} = _Some({})",
+                    result_var, body_var
+                ))?;
 
-                self.emitter.grow_current_line_with(&format!("(_Some({body_var}()) if "))?;
-                self.visit(cond)?;
-                self.emitter.grow_current_line_with(" else _None)")?;
+                self.emitter.decrease_indentation()?;
+
+                self.emitter.add_full_line_before_current("else:")?;
+                self.emitter.increase_indentation();
+                self.emitter
+                    .add_full_line_before_current(&format!("{} = _None", result_var))?;
+                self.emitter.decrease_indentation()?;
+
+                self.end_scope()?;
+                self.emitter.grow_current_line_with(&result_var)?;
             }
             AstNode::Else => {
                 self.emitter.require_helper(HelperFunction::Option);
@@ -495,27 +514,35 @@ impl Transpiler {
                 self.visit(option)?;
                 let opt_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
 
+                let result_var = self.emitter.fresh_hidden_var();
+
                 self.emitter.push_scope();
-                let default_fn = self.emitter.fresh_hidden_var();
                 self.emitter
-                    .add_full_line_before_current(&format!("def {}():", default_fn))?;
+                    .add_full_line_before_current(&format!("if isinstance({}, _Some):", opt_var))?;
+                self.emitter.increase_indentation();
+                self.emitter
+                    .add_full_line_before_current(&format!("{} = {}.value", result_var, opt_var))?;
+                self.emitter.decrease_indentation()?;
+
+                self.emitter.add_full_line_before_current("else:")?;
                 self.emitter.increase_indentation();
                 self.emitter.mark_checkpoint()?;
                 self.visit(default)?;
                 let default_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
                 self.emitter
-                    .add_full_line_before_current(&format!("return {}", default_var))?;
+                    .add_full_line_before_current(&format!("{} = {}", result_var, default_var))?;
                 self.emitter.decrease_indentation()?;
-                self.end_scope()?;
 
-                self.emitter.grow_current_line_with(&format!(
-                    "({}.value if isinstance({}, _Some) else {}())",
-                    opt_var, opt_var, default_fn
-                ))?;
+                self.end_scope()?;
+                self.emitter.grow_current_line_with(&result_var)?;
             }
             AstNode::Root => {
-                for child in node.children() {
+                let children: Vec<_> = node.children().collect();
+                for (i, child) in children.iter().enumerate() {
                     self.visit(&child)?;
+                    if i < children.len() - 1 {
+                        self.emitter.finalize_statement()?;
+                    }
                 }
             }
             AstNode::Literal => self
@@ -774,7 +801,7 @@ impl Transpiler {
                     _message: "StringPart/InterpolationPart should be handled by StringLit"
                         .to_string(),
                 });
-            },
+            }
             AstNode::MapLit => {
                 let entries: Vec<_> = node.children().collect();
                 self.emitter.grow_current_line_with("{")?;
@@ -785,7 +812,10 @@ impl Transpiler {
                     let entry_children: Vec<_> = entry.children().collect();
                     if entry_children.len() != 2 {
                         return Err(LanguloError::InternalError {
-                            _message: format!("MapEntry should have 2 children, found {}", entry_children.len()),
+                            _message: format!(
+                                "MapEntry should have 2 children, found {}",
+                                entry_children.len()
+                            ),
                         });
                     }
                     self.visit(&entry_children[0])?;
@@ -835,7 +865,8 @@ impl Transpiler {
                     });
                 }
                 self.emitter.grow_current_line_with("{")?;
-                self.emitter.grow_current_line_with("i: i for i in range(")?;
+                self.emitter
+                    .grow_current_line_with("i: i for i in range(")?;
                 self.visit(&children[0])?;
                 self.emitter.grow_current_line_with(", ")?;
                 self.visit(&children[1])?;
@@ -848,7 +879,10 @@ impl Transpiler {
                 let children: Vec<_> = node.children().collect();
                 if children.len() != 2 {
                     return Err(LanguloError::InternalError {
-                        _message: format!("MapIndex should have 2 children, found {}", children.len()),
+                        _message: format!(
+                            "MapIndex should have 2 children, found {}",
+                            children.len()
+                        ),
                     });
                 }
                 let map_expr = &children[0];
@@ -859,7 +893,8 @@ impl Transpiler {
                 let uniterable_map_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
                 let map_var = self.emitter.fresh_hidden_var();
                 self.emitter.add_full_line_before_current(&format!(
-                    "{} = _to_iterable({})", map_var, uniterable_map_var
+                    "{} = _to_iterable({})",
+                    map_var, uniterable_map_var
                 ))?;
 
                 self.emitter.mark_checkpoint()?;
@@ -889,7 +924,10 @@ impl Transpiler {
                 let index_children: Vec<_> = child.children().collect();
                 if index_children.len() != 2 {
                     return Err(LanguloError::InternalError {
-                        _message: format!("MapIndex should have 2 children, found {}", index_children.len()),
+                        _message: format!(
+                            "MapIndex should have 2 children, found {}",
+                            index_children.len()
+                        ),
                     });
                 }
                 let map_expr = &index_children[0];
@@ -920,7 +958,10 @@ impl Transpiler {
                 let children: Vec<_> = node.children().collect();
                 if children.len() < 2 {
                     return Err(LanguloError::InternalError {
-                        _message: format!("Iter node should have at least 2 children (map + body expressions), found {}", children.len()),
+                        _message: format!(
+                            "Iter node should have at least 2 children (map + body expressions), found {}",
+                            children.len()
+                        ),
                     });
                 }
 
@@ -932,13 +973,15 @@ impl Transpiler {
                 let uniterable_map_var = self.emitter.resolve_checkpoint_to_hidden_var()?;
                 let map_var = self.emitter.fresh_hidden_var();
                 self.emitter.add_full_line_before_current(&format!(
-                    "{} = _to_iterable({})", map_var, uniterable_map_var
+                    "{} = _to_iterable({})",
+                    map_var, uniterable_map_var
                 ))?;
 
                 let result_var = self.emitter.fresh_hidden_var();
 
                 self.emitter.push_scope();
-                self.emitter.add_full_line_before_current(&format!("{} = None", result_var))?;
+                self.emitter
+                    .add_full_line_before_current(&format!("{} = None", result_var))?;
                 self.emitter.add_full_line_before_current("try:")?;
                 self.emitter.increase_indentation();
                 self.emitter.add_full_line_before_current(&format!(
@@ -952,14 +995,17 @@ impl Transpiler {
                     self.visit(expr)?;
                     let var = self.emitter.resolve_checkpoint_to_hidden_var()?;
                     if is_last {
-                        self.emitter.add_full_line_before_current(&format!("{} = {}", result_var, var))?;
+                        self.emitter
+                            .add_full_line_before_current(&format!("{} = {}", result_var, var))?;
                     }
                 }
                 self.emitter.decrease_indentation()?;
                 self.emitter.decrease_indentation()?;
-                self.emitter.add_full_line_before_current("except _Return as _r:")?;
+                self.emitter
+                    .add_full_line_before_current("except _Return as _r:")?;
                 self.emitter.increase_indentation();
-                self.emitter.add_full_line_before_current(&format!("{} = _r.value", result_var))?;
+                self.emitter
+                    .add_full_line_before_current(&format!("{} = _r.value", result_var))?;
                 self.emitter.decrease_indentation()?;
 
                 self.end_scope()?;
@@ -967,7 +1013,9 @@ impl Transpiler {
                 self.is_in_block = was_in_block;
             }
 
-            AstNode::IterVar =>self.emitter.grow_current_line_with(Self::literal_to_var(&node).as_str())?,
+            AstNode::IterVar => self
+                .emitter
+                .grow_current_line_with(Self::literal_to_var(&node).as_str())?,
         }
         Ok(())
     }

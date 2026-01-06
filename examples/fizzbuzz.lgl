@@ -1,0 +1,8 @@
+fizzbuzz = |@| 0..@ + 1 iter {
+    res = ""
+    if index % 3 == 0: res = res + "fizz"
+    if index % 5 == 0: res = res + "buzz"
+    if ask res: $res else $index
+}
+
+100.fizzbuzz()

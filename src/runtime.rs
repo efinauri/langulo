@@ -1063,5 +1063,29 @@ world""""#
         assert_eq!(ctx.eval_langulo_display("map_option = |@, fn| if ask @: fn(@ else 0)"), "<function>");
         assert_eq!(ctx.eval_langulo_display("print_option = |@| @.map_option(|opt| $'{opt}') else $'none'"), "<function>");
     }
+
+    /*
+      × Invalid assignment target
+   ╭─[1:17]
+ 1 │ fizzbuzz = |@| 0..@ iter {
+   ·                 ─────┬────
+   ·                      ╰── cannot be assigned to
+ 2 │ res = ""
+   ╰────
+     */
+    #[test]
+    fn test_bug2() {
+        let ctx = TestContext::new();
+        assert_eq!(ctx.eval_langulo_display(r#"fizzbuzz = |@| 0..@+1 iter {
+res = ""
+if index % 3 == 0: res = res + "fizz"
+if index % 5 == 0: res = res + "buzz"
+if ask res: $res else $index
+}"#), "<function>");
+        assert_eq!(ctx.eval_langulo_display("fizzbuzz(15)"), "fizzbuzz");
+        assert_eq!(ctx.eval_langulo_display("fizzbuzz(16)"), "16");
+        assert_eq!(ctx.eval_langulo_display("fizzbuzz(18)"), "fizz");
+        assert_eq!(ctx.eval_langulo_display("20.fizzbuzz()"), "buzz");
+    }
 }
 

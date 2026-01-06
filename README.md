@@ -4,7 +4,10 @@
     * [EXPRESSIONS](#expressions)
     * [FUNCTIONS](#functions)
     * [NULLABILITY AND IF/ELSE](#nullability-and-ifelse)
-  * [INSTALLATION](#installation)
+  * [INSTALLATION AND USAGE](#installation-and-usage)
+    * [REQUIREMENTS](#requirements)
+    * [INSTALL](#install)
+    * [USAGE](#usage)
 <!-- TOC -->
 
 # LANGULO
@@ -118,13 +121,26 @@ no_num = ?
 
 TODO
 
-## INSTALLATION
+## INSTALLATION AND USAGE
+
+### REQUIREMENTS
+
+- [cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html)
+- [Python 3.7+](https://www.python.org/downloads/)
+- optionally, git. Alternatively, you can download the source code as a zip file.
+
+### INSTALL
 
 ```bash
 git clone https://github.com/efinauri/langulo.git
-# in alternative, for the development version:
-# git clone -b dev https://github.com/efinauri/langulo.git
 cd langulo
 cargo build --release
-cargo run --release
 ```
+
+### USAGE
+
+`cargo run --release`, without additional arguments, starts a REPL session. 
+
+If you wish to evaluate a Langulo program written on a text file, add the relative argument ` -- path/to/file.lgl`.
+
+For example `cargo run --release -- examples/fizzbuzz.lgl`.

@@ -127,9 +127,9 @@ impl Tok<'_> {
             | Tok::RBracket
             | Tok::__Test_Eof => 0,
 
-            Tok::Assign => 0b_0000_0001,
+            Tok::Else(_) | Tok::Iter(_) => 0b_0000_0001,
 
-            Tok::Else(_) | Tok::Iter(_) => 0b_0000_0010,
+            Tok::Assign => 0b_0000_0010,
 
             Tok::DotDot(_) => 0b_0000_0011,
 
@@ -813,7 +813,7 @@ impl<'src> Parser<'src> {
 #[cfg(test)]
 mod tests {
     use crate::parser::AstNode::*;
-    use crate::parser::{has_print_marker, parse, AstNode};
+    use crate::parser::{has_print_marker, parse, AstNode, LanguloSyntaxNode};
 
     #[derive(Default)]
     struct AstExpectation<'a> {
@@ -1673,5 +1673,22 @@ world""""#,
             nodes: &[Root, MapIndex, StringLit, StringPart, Num],
             ..Default::default()
         })
+    }
+
+    #[test]
+    fn test_fizzbuzz_debug() {
+        let source = r#"fizzbuzz = |@| 0..@ iter {
+res = ""
+}"#;
+        let ast = parse(source).unwrap();
+
+        fn print_tree(node: &LanguloSyntaxNode, indent: usize) {
+            println!("{}{:?} '{}'", "  ".repeat(indent), node.kind(), node.text());
+            for child in node.children() {
+                print_tree(&child, indent + 1);
+            }
+        }
+
+        print_tree(&ast, 0);
     }
 }

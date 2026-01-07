@@ -198,7 +198,7 @@ char #4 is 'o'
 
 ### REQUIREMENTS
 
-- [cargo](https://doc.rust-lang.org/cargo/getting-started/installation.html)
+- [Rust 2024](https://rustup.rs/)
 - [Python 3.7+](https://www.python.org/downloads/)
 - optionally, git. Alternatively, you can download the source code as a zip file.
 
